@@ -30,6 +30,7 @@ import java.util.BitSet;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.WeakHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * The internal data structure that stores the thread-local variables for Netty and all {@link FastThreadLocal}s.
@@ -53,7 +54,8 @@ public final class InternalThreadLocalMap extends UnpaddedInternalThreadLocalMap
                 SystemPropertyUtil.getInt("io.netty.threadLocalMap.stringBuilder.initialSize", 1024);
         logger.debug("-Dio.netty.threadLocalMap.stringBuilder.initialSize: {}", STRING_BUILDER_INITIAL_SIZE);
 
-        STRING_BUILDER_MAX_SIZE = SystemPropertyUtil.getInt("io.netty.threadLocalMap.stringBuilder.maxSize", 1024 * 4);
+        STRING_BUILDER_MAX_SIZE = SystemPropertyUtil.getInt("io.netty.threadLocalMap.stringBuilder.maxSize",
+                1024 * 4);
         logger.debug("-Dio.netty.threadLocalMap.stringBuilder.maxSize: {}", STRING_BUILDER_MAX_SIZE);
     }
 
@@ -106,6 +108,17 @@ public final class InternalThreadLocalMap extends UnpaddedInternalThreadLocalMap
     }
 
     public static int nextVariableIndex() {
+        Thread thread = Thread.currentThread();
+        AtomicInteger nextIndex;
+        if (thread instanceof FastThreadLocalThread) {
+            nextIndex = ((FastThreadLocalThread) thread).getNextIndex();
+        } else {
+            InternalThreadLocalMap localMap = slowGet();
+            nextIndex = (AtomicInteger) localMap.indexedVariable(0);
+            if (nextIndex == UNSET) {
+                localMap.setIndexedVariable(0, nextIndex = new AtomicInteger(1));
+            }
+        }
         int index = nextIndex.getAndIncrement();
         if (index < 0) {
             nextIndex.decrementAndGet();
@@ -136,42 +149,42 @@ public final class InternalThreadLocalMap extends UnpaddedInternalThreadLocalMap
         int count = 0;
 
         if (futureListenerStackDepth != 0) {
-            count ++;
+            count++;
         }
         if (localChannelReaderStackDepth != 0) {
-            count ++;
+            count++;
         }
         if (handlerSharableCache != null) {
-            count ++;
+            count++;
         }
         if (counterHashCode != null) {
-            count ++;
+            count++;
         }
         if (random != null) {
-            count ++;
+            count++;
         }
         if (typeParameterMatcherGetCache != null) {
-            count ++;
+            count++;
         }
         if (typeParameterMatcherFindCache != null) {
-            count ++;
+            count++;
         }
         if (stringBuilder != null) {
-            count ++;
+            count++;
         }
         if (charsetEncoderCache != null) {
-            count ++;
+            count++;
         }
         if (charsetDecoderCache != null) {
-            count ++;
+            count++;
         }
         if (arrayList != null) {
-            count ++;
+            count++;
         }
 
-        for (Object o: indexedVariables) {
+        for (Object o : indexedVariables) {
             if (o != UNSET) {
-                count ++;
+                count++;
             }
         }
 
@@ -252,7 +265,8 @@ public final class InternalThreadLocalMap extends UnpaddedInternalThreadLocalMap
     public Map<Class<?>, Map<String, TypeParameterMatcher>> typeParameterMatcherFindCache() {
         Map<Class<?>, Map<String, TypeParameterMatcher>> cache = typeParameterMatcherFindCache;
         if (cache == null) {
-            typeParameterMatcherFindCache = cache = new IdentityHashMap<Class<?>, Map<String, TypeParameterMatcher>>();
+            typeParameterMatcherFindCache = cache = new IdentityHashMap<Class<?>, Map<String,
+                    TypeParameterMatcher>>();
         }
         return cache;
     }
@@ -284,7 +298,7 @@ public final class InternalThreadLocalMap extends UnpaddedInternalThreadLocalMap
 
     public Object indexedVariable(int index) {
         Object[] lookup = indexedVariables;
-        return index < lookup.length? lookup[index] : UNSET;
+        return index < lookup.length ? lookup[index] : UNSET;
     }
 
     /**
@@ -306,12 +320,12 @@ public final class InternalThreadLocalMap extends UnpaddedInternalThreadLocalMap
         Object[] oldArray = indexedVariables;
         final int oldCapacity = oldArray.length;
         int newCapacity = index;
-        newCapacity |= newCapacity >>>  1;
-        newCapacity |= newCapacity >>>  2;
-        newCapacity |= newCapacity >>>  4;
-        newCapacity |= newCapacity >>>  8;
+        newCapacity |= newCapacity >>> 1;
+        newCapacity |= newCapacity >>> 2;
+        newCapacity |= newCapacity >>> 4;
+        newCapacity |= newCapacity >>> 8;
         newCapacity |= newCapacity >>> 16;
-        newCapacity ++;
+        newCapacity++;
 
         Object[] newArray = Arrays.copyOf(oldArray, newCapacity);
         Arrays.fill(newArray, oldCapacity, newArray.length, UNSET);

@@ -18,6 +18,8 @@ package io.netty.util.concurrent;
 import io.netty.util.internal.InternalThreadLocalMap;
 import io.netty.util.internal.UnstableApi;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
  * A special {@link Thread} that provides fast access to {@link FastThreadLocal} variables.
  */
@@ -97,5 +99,12 @@ public class FastThreadLocalThread extends Thread {
     public static boolean willCleanupFastThreadLocals(Thread thread) {
         return thread instanceof FastThreadLocalThread &&
                 ((FastThreadLocalThread) thread).willCleanupFastThreadLocals();
+    }
+
+
+    private final AtomicInteger nextIndex = new AtomicInteger(0);
+
+    public AtomicInteger getNextIndex() {
+        return nextIndex;
     }
 }
