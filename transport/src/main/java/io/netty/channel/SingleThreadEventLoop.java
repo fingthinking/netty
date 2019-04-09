@@ -56,6 +56,7 @@ public abstract class SingleThreadEventLoop extends SingleThreadEventExecutor im
                                     boolean addTaskWakesUp, int maxPendingTasks,
                                     RejectedExecutionHandler rejectedExecutionHandler) {
         super(parent, executor, addTaskWakesUp, maxPendingTasks, rejectedExecutionHandler);
+        // TODO ? 什么队列, 是否可以认为是兜底逻辑
         tailTasks = newTaskQueue(maxPendingTasks);
     }
 

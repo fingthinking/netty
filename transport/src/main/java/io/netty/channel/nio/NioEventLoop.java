@@ -154,6 +154,7 @@ public final class NioEventLoop extends SingleThreadEventLoop {
             this.selector = unwrappedSelector;
         }
 
+        // TODO 分别是干啥的
         SelectorTuple(Selector unwrappedSelector, Selector selector) {
             this.unwrappedSelector = unwrappedSelector;
             this.selector = selector;
@@ -163,6 +164,7 @@ public final class NioEventLoop extends SingleThreadEventLoop {
     private SelectorTuple openSelector() {
         final Selector unwrappedSelector;
         try {
+            // 打开一个 selector
             unwrappedSelector = provider.openSelector();
         } catch (IOException e) {
             throw new ChannelException("failed to open a new selector", e);
@@ -199,6 +201,7 @@ public final class NioEventLoop extends SingleThreadEventLoop {
         final Class<?> selectorImplClass = (Class<?>) maybeSelectorImplClass;
         final SelectedSelectionKeySet selectedKeySet = new SelectedSelectionKeySet();
 
+        // 此处是为了优化两个 set
         Object maybeException = AccessController.doPrivileged(new PrivilegedAction<Object>() {
             @Override
             public Object run() {

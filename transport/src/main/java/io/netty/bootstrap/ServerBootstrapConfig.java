@@ -30,6 +30,8 @@ import java.util.Map;
 public final class ServerBootstrapConfig extends AbstractBootstrapConfig<ServerBootstrap, ServerChannel> {
 
     ServerBootstrapConfig(ServerBootstrap bootstrap) {
+        // 持有一个 ServerBootstrap 对象
+        // 该对象其实就是一个 ServerBootstrap 各种属性的一个代理
         super(bootstrap);
     }
 

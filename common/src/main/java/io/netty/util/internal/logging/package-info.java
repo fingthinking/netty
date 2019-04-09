@@ -15,6 +15,7 @@
  */
 
 /**
+ * 内部日志处理类，主要是为了兼容各日志组件.
  * <em>Internal-use-only</em> logging API which is not allowed to be used outside Netty.
  */
 package io.netty.util.internal.logging;
