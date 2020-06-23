@@ -18,8 +18,10 @@ package io.netty.handler.ssl.util;
 
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
-import io.netty.util.internal.EmptyArrays;
 import io.netty.util.concurrent.FastThreadLocal;
+import io.netty.util.internal.EmptyArrays;
+import io.netty.util.internal.ObjectUtil;
+import io.netty.util.internal.StringUtil;
 
 import javax.net.ssl.ManagerFactoryParameters;
 import javax.net.ssl.TrustManager;
@@ -155,9 +157,7 @@ public final class FingerprintTrustManagerFactory extends SimpleTrustManagerFact
      * @param fingerprints a list of SHA1 fingerprints
      */
     public FingerprintTrustManagerFactory(byte[]... fingerprints) {
-        if (fingerprints == null) {
-            throw new NullPointerException("fingerprints");
-        }
+        ObjectUtil.checkNotNull(fingerprints, "fingerprints");
 
         List<byte[]> list = new ArrayList<byte[]>(fingerprints.length);
         for (byte[] f: fingerprints) {
@@ -171,13 +171,11 @@ public final class FingerprintTrustManagerFactory extends SimpleTrustManagerFact
             list.add(f.clone());
         }
 
-        this.fingerprints = list.toArray(new byte[list.size()][]);
+        this.fingerprints = list.toArray(new byte[0][]);
     }
 
     private static byte[][] toFingerprintArray(Iterable<String> fingerprints) {
-        if (fingerprints == null) {
-            throw new NullPointerException("fingerprints");
-        }
+        ObjectUtil.checkNotNull(fingerprints, "fingerprints");
 
         List<byte[]> list = new ArrayList<byte[]>();
         for (String f: fingerprints) {
@@ -193,15 +191,10 @@ public final class FingerprintTrustManagerFactory extends SimpleTrustManagerFact
                 throw new IllegalArgumentException("malformed fingerprint: " + f + " (expected: SHA1)");
             }
 
-            byte[] farr = new byte[SHA1_BYTE_LEN];
-            for (int i = 0; i < farr.length; i ++) {
-                int strIdx = i << 1;
-                farr[i] = (byte) Integer.parseInt(f.substring(strIdx, strIdx + 2), 16);
-            }
-            list.add(farr);
+            list.add(StringUtil.decodeHexDump(f));
         }
 
-        return list.toArray(new byte[list.size()][]);
+        return list.toArray(new byte[0][]);
     }
 
     @Override

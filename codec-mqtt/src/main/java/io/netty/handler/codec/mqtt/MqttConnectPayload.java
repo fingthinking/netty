@@ -16,6 +16,8 @@
 
 package io.netty.handler.codec.mqtt;
 
+import java.util.Arrays;
+
 import io.netty.util.CharsetUtil;
 import io.netty.util.internal.StringUtil;
 
@@ -74,7 +76,7 @@ public final class MqttConnectPayload {
      */
     @Deprecated
     public String willMessage() {
-        return new String(willMessage, CharsetUtil.UTF_8);
+        return willMessage == null ? null : new String(willMessage, CharsetUtil.UTF_8);
     }
 
     public byte[] willMessageInBytes() {
@@ -90,7 +92,7 @@ public final class MqttConnectPayload {
      */
     @Deprecated
     public String password() {
-        return new String(password, CharsetUtil.UTF_8);
+        return password == null ? null : new String(password, CharsetUtil.UTF_8);
     }
 
     public byte[] passwordInBytes() {
@@ -103,9 +105,9 @@ public final class MqttConnectPayload {
             .append('[')
             .append("clientIdentifier=").append(clientIdentifier)
             .append(", willTopic=").append(willTopic)
-            .append(", willMessage=").append(willMessage)
+            .append(", willMessage=").append(Arrays.toString(willMessage))
             .append(", userName=").append(userName)
-            .append(", password=").append(password)
+            .append(", password=").append(Arrays.toString(password))
             .append(']')
             .toString();
     }

@@ -16,8 +16,8 @@
 
 package io.netty.buffer;
 
-import io.netty.util.Recycler.Handle;
 import io.netty.util.ReferenceCounted;
+import io.netty.util.internal.ObjectPool.Handle;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -63,7 +63,7 @@ abstract class AbstractPooledDerivedByteBuf extends AbstractReferenceCountedByte
         try {
             maxCapacity(maxCapacity);
             setIndex0(readerIndex, writerIndex); // It is assumed the bounds checking is done by the caller.
-            setRefCnt(1);
+            resetRefCnt();
 
             @SuppressWarnings("unchecked")
             final U castThis = (U) this;
@@ -124,6 +124,11 @@ abstract class AbstractPooledDerivedByteBuf extends AbstractReferenceCountedByte
     }
 
     @Override
+    public boolean isContiguous() {
+        return unwrap().isContiguous();
+    }
+
+    @Override
     public final int nioBufferCount() {
         return unwrap().nioBufferCount();
     }
@@ -141,11 +146,13 @@ abstract class AbstractPooledDerivedByteBuf extends AbstractReferenceCountedByte
 
     @Override
     public ByteBuf slice(int index, int length) {
+        ensureAccessible();
         // All reference count methods should be inherited from this object (this is the "parent").
         return new PooledNonRetainedSlicedByteBuf(this, unwrap(), index, length);
     }
 
     final ByteBuf duplicate0() {
+        ensureAccessible();
         // All reference count methods should be inherited from this object (this is the "parent").
         return new PooledNonRetainedDuplicateByteBuf(this, unwrap());
     }
@@ -199,6 +206,7 @@ abstract class AbstractPooledDerivedByteBuf extends AbstractReferenceCountedByte
 
         @Override
         public ByteBuf duplicate() {
+            ensureAccessible();
             return new PooledNonRetainedDuplicateByteBuf(referenceCountDelegate, this);
         }
 
@@ -209,7 +217,7 @@ abstract class AbstractPooledDerivedByteBuf extends AbstractReferenceCountedByte
 
         @Override
         public ByteBuf slice(int index, int length) {
-            checkIndex0(index, length);
+            checkIndex(index, length);
             return new PooledNonRetainedSlicedByteBuf(referenceCountDelegate, unwrap(), index, length);
         }
 
@@ -275,6 +283,7 @@ abstract class AbstractPooledDerivedByteBuf extends AbstractReferenceCountedByte
 
         @Override
         public ByteBuf duplicate() {
+            ensureAccessible();
             return new PooledNonRetainedDuplicateByteBuf(referenceCountDelegate, unwrap())
                     .setIndex(idx(readerIndex()), idx(writerIndex()));
         }
@@ -286,7 +295,7 @@ abstract class AbstractPooledDerivedByteBuf extends AbstractReferenceCountedByte
 
         @Override
         public ByteBuf slice(int index, int length) {
-            checkIndex0(index, length);
+            checkIndex(index, length);
             return new PooledNonRetainedSlicedByteBuf(referenceCountDelegate, unwrap(), idx(index), length);
         }
 

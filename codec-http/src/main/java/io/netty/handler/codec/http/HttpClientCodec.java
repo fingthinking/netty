@@ -28,6 +28,10 @@ import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static io.netty.handler.codec.http.HttpObjectDecoder.DEFAULT_MAX_CHUNK_SIZE;
+import static io.netty.handler.codec.http.HttpObjectDecoder.DEFAULT_MAX_HEADER_SIZE;
+import static io.netty.handler.codec.http.HttpObjectDecoder.DEFAULT_MAX_INITIAL_LINE_LENGTH;
+
 /**
  * A combination of {@link HttpRequestEncoder} and {@link HttpResponseDecoder}
  * which enables easier client side HTTP implementation. {@link HttpClientCodec}
@@ -61,7 +65,7 @@ public final class HttpClientCodec extends CombinedChannelDuplexHandler<HttpResp
      * {@code maxChunkSize (8192)}).
      */
     public HttpClientCodec() {
-        this(4096, 8192, 8192, false);
+        this(DEFAULT_MAX_INITIAL_LINE_LENGTH, DEFAULT_MAX_HEADER_SIZE, DEFAULT_MAX_CHUNK_SIZE, false);
     }
 
     /**
@@ -160,7 +164,7 @@ public final class HttpClientCodec extends CombinedChannelDuplexHandler<HttpResp
                 return;
             }
 
-            if (msg instanceof HttpRequest && !done) {
+            if (msg instanceof HttpRequest) {
                 queue.offer(((HttpRequest) msg).method());
             }
 
@@ -222,56 +226,63 @@ public final class HttpClientCodec extends CombinedChannelDuplexHandler<HttpResp
 
         @Override
         protected boolean isContentAlwaysEmpty(HttpMessage msg) {
-            final int statusCode = ((HttpResponse) msg).status().code();
-            if (statusCode == 100) {
-                // 100-continue response should be excluded from paired comparison.
-                return true;
-            }
-
-            // Get the getMethod of the HTTP request that corresponds to the
+            // Get the method of the HTTP request that corresponds to the
             // current response.
+            //
+            // Even if we do not use the method to compare we still need to poll it to ensure we keep
+            // request / response pairs in sync.
             HttpMethod method = queue.poll();
 
-            char firstChar = method.name().charAt(0);
-            switch (firstChar) {
-            case 'H':
-                // According to 4.3, RFC2616:
-                // All responses to the HEAD request getMethod MUST NOT include a
-                // message-body, even though the presence of entity-header fields
-                // might lead one to believe they do.
-                if (HttpMethod.HEAD.equals(method)) {
-                    return true;
-
-                    // The following code was inserted to work around the servers
-                    // that behave incorrectly.  It has been commented out
-                    // because it does not work with well behaving servers.
-                    // Please note, even if the 'Transfer-Encoding: chunked'
-                    // header exists in the HEAD response, the response should
-                    // have absolutely no content.
-                    //
-                    //// Interesting edge case:
-                    //// Some poorly implemented servers will send a zero-byte
-                    //// chunk if Transfer-Encoding of the response is 'chunked'.
-                    ////
-                    //// return !msg.isChunked();
-                }
-                break;
-            case 'C':
-                // Successful CONNECT request results in a response with empty body.
-                if (statusCode == 200) {
-                    if (HttpMethod.CONNECT.equals(method)) {
-                        // Proxy connection established - Parse HTTP only if configured by parseHttpAfterConnectRequest,
-                        // else pass through.
-                        if (!parseHttpAfterConnectRequest) {
-                            done = true;
-                            queue.clear();
-                        }
-                        return true;
-                    }
-                }
-                break;
+            final int statusCode = ((HttpResponse) msg).status().code();
+            if (statusCode >= 100 && statusCode < 200) {
+                // An informational response should be excluded from paired comparison.
+                // Just delegate to super method which has all the needed handling.
+                return super.isContentAlwaysEmpty(msg);
             }
 
+            // If the remote peer did for example send multiple responses for one request (which is not allowed per
+            // spec but may still be possible) method will be null so guard against it.
+            if (method != null) {
+                char firstChar = method.name().charAt(0);
+                switch (firstChar) {
+                    case 'H':
+                        // According to 4.3, RFC2616:
+                        // All responses to the HEAD request method MUST NOT include a
+                        // message-body, even though the presence of entity-header fields
+                        // might lead one to believe they do.
+                        if (HttpMethod.HEAD.equals(method)) {
+                            return true;
+
+                            // The following code was inserted to work around the servers
+                            // that behave incorrectly.  It has been commented out
+                            // because it does not work with well behaving servers.
+                            // Please note, even if the 'Transfer-Encoding: chunked'
+                            // header exists in the HEAD response, the response should
+                            // have absolutely no content.
+                            //
+                            //// Interesting edge case:
+                            //// Some poorly implemented servers will send a zero-byte
+                            //// chunk if Transfer-Encoding of the response is 'chunked'.
+                            ////
+                            //// return !msg.isChunked();
+                        }
+                        break;
+                    case 'C':
+                        // Successful CONNECT request results in a response with empty body.
+                        if (statusCode == 200) {
+                            if (HttpMethod.CONNECT.equals(method)) {
+                                // Proxy connection established - Parse HTTP only if configured by
+                                // parseHttpAfterConnectRequest, else pass through.
+                                if (!parseHttpAfterConnectRequest) {
+                                    done = true;
+                                    queue.clear();
+                                }
+                                return true;
+                            }
+                        }
+                        break;
+                }
+            }
             return super.isContentAlwaysEmpty(msg);
         }
 

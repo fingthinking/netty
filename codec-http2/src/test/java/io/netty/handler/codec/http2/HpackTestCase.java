@@ -41,8 +41,8 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.util.internal.StringUtil;
 
-import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.lang.reflect.Type;
@@ -71,11 +71,11 @@ final class HpackTestCase {
     private HpackTestCase() {
     }
 
-    static HpackTestCase load(InputStream is) throws IOException {
+    static HpackTestCase load(InputStream is) {
         InputStreamReader r = new InputStreamReader(is);
         HpackTestCase hpackTestCase = GSON.fromJson(r, HpackTestCase.class);
         for (HeaderBlock headerBlock : hpackTestCase.headerBlocks) {
-            headerBlock.encodedBytes = HpackHex.decodeHex(headerBlock.getEncodedStr().toCharArray());
+            headerBlock.encodedBytes = StringUtil.decodeHexDump(headerBlock.getEncodedStr());
         }
         return hpackTestCase;
     }
@@ -92,7 +92,7 @@ final class HpackTestCase {
             if (!Arrays.equals(actual, headerBlock.encodedBytes)) {
                 throw new AssertionError(
                         "\nEXPECTED:\n" + headerBlock.getEncodedStr() +
-                                "\nACTUAL:\n" + HpackHex.encodeHexString(actual));
+                                "\nACTUAL:\n" + StringUtil.toHexString(actual));
             }
 
             List<HpackHeaderField> actualDynamicTable = new ArrayList<HpackHeaderField>();
@@ -102,7 +102,7 @@ final class HpackTestCase {
 
             List<HpackHeaderField> expectedDynamicTable = headerBlock.getDynamicTable();
 
-            if (!expectedDynamicTable.equals(actualDynamicTable)) {
+            if (!headersEqual(expectedDynamicTable, actualDynamicTable)) {
                 throw new AssertionError(
                         "\nEXPECTED DYNAMIC TABLE:\n" + expectedDynamicTable +
                                 "\nACTUAL DYNAMIC TABLE:\n" + actualDynamicTable);
@@ -128,7 +128,7 @@ final class HpackTestCase {
                 expectedHeaders.add(new HpackHeaderField(h.name, h.value));
             }
 
-            if (!expectedHeaders.equals(actualHeaders)) {
+            if (!headersEqual(expectedHeaders, actualHeaders)) {
                 throw new AssertionError(
                         "\nEXPECTED:\n" + expectedHeaders +
                                 "\nACTUAL:\n" + actualHeaders);
@@ -141,7 +141,7 @@ final class HpackTestCase {
 
             List<HpackHeaderField> expectedDynamicTable = headerBlock.getDynamicTable();
 
-            if (!expectedDynamicTable.equals(actualDynamicTable)) {
+            if (!headersEqual(expectedDynamicTable, actualDynamicTable)) {
                 throw new AssertionError(
                         "\nEXPECTED DYNAMIC TABLE:\n" + expectedDynamicTable +
                                 "\nACTUAL DYNAMIC TABLE:\n" + actualDynamicTable);
@@ -174,7 +174,7 @@ final class HpackTestCase {
             maxHeaderTableSize = Integer.MAX_VALUE;
         }
 
-        return new HpackDecoder(DEFAULT_HEADER_LIST_SIZE, 32, maxHeaderTableSize);
+        return new HpackDecoder(DEFAULT_HEADER_LIST_SIZE, maxHeaderTableSize);
     }
 
     private static byte[] encode(HpackEncoder hpackEncoder, List<HpackHeaderField> headers, int maxHeaderTableSize,
@@ -214,7 +214,7 @@ final class HpackTestCase {
         try {
             List<HpackHeaderField> headers = new ArrayList<HpackHeaderField>();
             TestHeaderListener listener = new TestHeaderListener(headers);
-            hpackDecoder.decode(0, in, listener);
+            hpackDecoder.decode(0, in, listener, true);
             return headers;
         } finally {
             in.release();
@@ -227,6 +227,18 @@ final class HpackTestCase {
             ret.append(s);
         }
         return ret.toString();
+    }
+
+    private static boolean headersEqual(List<HpackHeaderField> expected, List<HpackHeaderField> actual) {
+        if (expected.size() != actual.size()) {
+            return false;
+        }
+        for (int i = 0; i < expected.size(); i++) {
+            if (!expected.get(i).equalsForTest(actual.get(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     static class HeaderBlock {

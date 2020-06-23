@@ -31,22 +31,23 @@ import static org.junit.Assume.assumeTrue;
 @RunWith(Parameterized.class)
 public class ConscryptJdkSslEngineInteropTest extends SSLEngineTest {
 
-    @Parameterized.Parameters(name = "{index}: bufferType = {0}")
-    public static Collection<Object> data() {
-        List<Object> params = new ArrayList<Object>();
+    @Parameterized.Parameters(name = "{index}: bufferType = {0}, combo = {1}, delegate = {2}")
+    public static Collection<Object[]> data() {
+        List<Object[]> params = new ArrayList<Object[]>();
         for (BufferType type: BufferType.values()) {
-            params.add(type);
+            params.add(new Object[] { type, ProtocolCipherCombo.tlsv12(), false });
+            params.add(new Object[] { type, ProtocolCipherCombo.tlsv12(), true });
         }
         return params;
     }
 
-    public ConscryptJdkSslEngineInteropTest(BufferType type) {
-        super(type);
+    public ConscryptJdkSslEngineInteropTest(BufferType type, ProtocolCipherCombo combo, boolean delegate) {
+        super(type, combo, delegate);
     }
 
     @BeforeClass
     public static void checkConscrypt() {
-        assumeTrue(ConscryptAlpnSslEngine.isAvailable());
+        assumeTrue(Conscrypt.isAvailable());
     }
 
     @Override
@@ -72,5 +73,11 @@ public class ConscryptJdkSslEngineInteropTest extends SSLEngineTest {
     @Ignore /* Does the JDK support a "max certificate chain length"? */
     @Override
     public void testMutualAuthValidClientCertChainTooLongFailRequireClientAuth() throws Exception {
+    }
+
+    @Override
+    protected boolean mySetupMutualAuthServerIsValidServerException(Throwable cause) {
+        // TODO(scott): work around for a JDK issue. The exception should be SSLHandshakeException.
+        return super.mySetupMutualAuthServerIsValidServerException(cause) || causedBySSLException(cause);
     }
 }

@@ -82,7 +82,7 @@ public class SocketConnectTest extends AbstractSocketTest {
         Channel cc = null;
         try {
             sb.childHandler(new ChannelInboundHandlerAdapter());
-            sc = sb.bind(0).syncUninterruptibly().channel();
+            sc = sb.bind().syncUninterruptibly().channel();
 
             cb.handler(new ChannelInboundHandlerAdapter() {
                 @Override
