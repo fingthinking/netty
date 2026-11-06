@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -24,12 +24,12 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.codec.DecoderResult;
 import io.netty.handler.codec.MessageAggregator;
-import io.netty.handler.codec.TooLongFrameException;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.CONNECTION;
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_LENGTH;
+import static io.netty.handler.codec.http.HttpHeaderNames.EXPECT;
 import static io.netty.handler.codec.http.HttpUtil.getContentLength;
 
 /**
@@ -151,18 +151,21 @@ public class HttpObjectAggregator
 
     @Override
     protected boolean isContentLengthInvalid(HttpMessage start, int maxContentLength) {
-        return getContentLength(start, -1L) > maxContentLength;
+        try {
+            return getContentLength(start, -1L) > maxContentLength;
+        } catch (final NumberFormatException e) {
+            return false;
+        }
     }
 
-    @Override
-    protected Object newContinueResponse(HttpMessage start, int maxContentLength, ChannelPipeline pipeline) {
+    private Object continueResponse(HttpMessage start, int maxContentLength, ChannelPipeline pipeline) {
         if (HttpUtil.isUnsupportedExpectation(start)) {
             // if the request contains an unsupported expectation, we return 417
             pipeline.fireUserEventTriggered(HttpExpectationFailedEvent.INSTANCE);
             return EXPECTATION_FAILED.retainedDuplicate();
         } else if (HttpUtil.is100ContinueExpected(start)) {
             // if the request contains 100-continue but the content-length is too large, we return 413
-            if (getContentLength(start, -1L) <= maxContentLength) {
+            if (!isContentLengthInvalid(start, maxContentLength)) {
                 return CONTINUE.retainedDuplicate();
             }
             pipeline.fireUserEventTriggered(HttpExpectationFailedEvent.INSTANCE);
@@ -170,6 +173,17 @@ public class HttpObjectAggregator
         }
 
         return null;
+    }
+
+    @Override
+    protected Object newContinueResponse(HttpMessage start, int maxContentLength, ChannelPipeline pipeline) {
+        Object response = continueResponse(start, maxContentLength, pipeline);
+        // we're going to respond based on the request expectation so there's no
+        // need to propagate the expectation further.
+        if (response != null) {
+            start.headers().remove(EXPECT);
+        }
+        return response;
     }
 
     @Override
@@ -233,7 +247,8 @@ public class HttpObjectAggregator
 
             // If the client started to send data already, close because it's impossible to recover.
             // If keep-alive is off and 'Expect: 100-continue' is missing, no need to leave the connection open.
-            if (oversized instanceof FullHttpMessage ||
+            // If auto read is false the channel must be closed or it will be stuck without a call to read()
+            if (oversized instanceof FullHttpMessage || !ctx.channel().config().isAutoRead() ||
                 !HttpUtil.is100ContinueExpected(oversized) && !HttpUtil.isKeepAlive(oversized)) {
                 ChannelFuture future = ctx.writeAndFlush(TOO_LARGE_CLOSE.retainedDuplicate());
                 future.addListener(new ChannelFutureListener() {
@@ -256,16 +271,9 @@ public class HttpObjectAggregator
                     }
                 });
             }
-
-            // If an oversized request was handled properly and the connection is still alive
-            // (i.e. rejected 100-continue). the decoder should prepare to handle a new message.
-            HttpObjectDecoder decoder = ctx.pipeline().get(HttpObjectDecoder.class);
-            if (decoder != null) {
-                decoder.reset();
-            }
         } else if (oversized instanceof HttpResponse) {
             ctx.close();
-            throw new TooLongFrameException("Response entity too large: " + oversized);
+            throw new TooLongHttpContentException("Response entity too large: " + oversized);
         } else {
             throw new IllegalStateException();
         }
@@ -409,9 +417,8 @@ public class HttpObjectAggregator
 
         @Override
         public FullHttpRequest replace(ByteBuf content) {
-            DefaultFullHttpRequest dup = new DefaultFullHttpRequest(protocolVersion(), method(), uri(), content);
-            dup.headers().set(headers());
-            dup.trailingHeaders().set(trailingHeaders());
+            DefaultFullHttpRequest dup = new DefaultFullHttpRequest(protocolVersion(), method(), uri(), content,
+                    headers().copy(), trailingHeaders().copy());
             dup.setDecoderResult(decoderResult());
             return dup;
         }
@@ -508,9 +515,8 @@ public class HttpObjectAggregator
 
         @Override
         public FullHttpResponse replace(ByteBuf content) {
-            DefaultFullHttpResponse dup = new DefaultFullHttpResponse(getProtocolVersion(), getStatus(), content);
-            dup.headers().set(headers());
-            dup.trailingHeaders().set(trailingHeaders());
+            DefaultFullHttpResponse dup = new DefaultFullHttpResponse(getProtocolVersion(), getStatus(), content,
+                    headers().copy(), trailingHeaders().copy());
             dup.setDecoderResult(decoderResult());
             return dup;
         }

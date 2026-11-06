@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -30,19 +30,19 @@ public final class SpdyHttpHeaders {
         /**
          * {@code "x-spdy-stream-id"}
          */
-        public static final AsciiString STREAM_ID = new AsciiString("x-spdy-stream-id");
+        public static final AsciiString STREAM_ID = AsciiString.cached("x-spdy-stream-id");
         /**
          * {@code "x-spdy-associated-to-stream-id"}
          */
-        public static final AsciiString ASSOCIATED_TO_STREAM_ID = new AsciiString("x-spdy-associated-to-stream-id");
+        public static final AsciiString ASSOCIATED_TO_STREAM_ID = AsciiString.cached("x-spdy-associated-to-stream-id");
         /**
          * {@code "x-spdy-priority"}
          */
-        public static final AsciiString PRIORITY = new AsciiString("x-spdy-priority");
+        public static final AsciiString PRIORITY = AsciiString.cached("x-spdy-priority");
         /**
          * {@code "x-spdy-scheme"}
          */
-        public static final AsciiString SCHEME = new AsciiString("x-spdy-scheme");
+        public static final AsciiString SCHEME = AsciiString.cached("x-spdy-scheme");
 
         private Names() { }
     }

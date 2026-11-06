@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -21,30 +21,39 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.channel.local.LocalAddress;
 import io.netty.channel.local.LocalChannel;
 import io.netty.channel.local.LocalServerChannel;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import io.netty.util.concurrent.EventExecutor;
+import io.netty.util.concurrent.Future;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.util.Iterator;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertSame;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 public class ChannelInitializerTest {
     private static final int TIMEOUT_MILLIS = 1000;
-    private static final LocalAddress SERVER_ADDRESS = new LocalAddress("addr");
+    private static final LocalAddress SERVER_ADDRESS = new LocalAddress(ChannelInitializerTest.class);
     private EventLoopGroup group;
     private ServerBootstrap server;
     private Bootstrap client;
     private InspectableHandler testHandler;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         group = new DefaultEventLoopGroup(1);
         server = new ServerBootstrap()
@@ -58,9 +67,50 @@ public class ChannelInitializerTest {
         testHandler = new InspectableHandler();
     }
 
-    @After
+    @AfterEach
     public void tearDown() {
         group.shutdownGracefully(0, TIMEOUT_MILLIS, TimeUnit.MILLISECONDS).syncUninterruptibly();
+    }
+
+    @Test
+    public void testInitChannelThrowsRegisterFirst() {
+        testInitChannelThrows(true);
+    }
+
+    @Test
+    public void testInitChannelThrowsRegisterAfter() {
+        testInitChannelThrows(false);
+    }
+
+    private void testInitChannelThrows(boolean registerFirst) {
+        final Exception exception = new Exception();
+        final AtomicReference<Throwable> causeRef = new AtomicReference<Throwable>();
+
+        ChannelPipeline pipeline = new LocalChannel().pipeline();
+
+        if (registerFirst) {
+            group.register(pipeline.channel()).syncUninterruptibly();
+        }
+        pipeline.addFirst(new ChannelInitializer<Channel>() {
+            @Override
+            protected void initChannel(Channel ch) throws Exception {
+                throw exception;
+            }
+
+            @Override
+            public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+                causeRef.set(cause);
+                super.exceptionCaught(ctx, cause);
+            }
+        });
+
+        if (!registerFirst) {
+            group.register(pipeline.channel()).syncUninterruptibly();
+        }
+        pipeline.channel().close().syncUninterruptibly();
+        pipeline.channel().closeFuture().syncUninterruptibly();
+
+        assertSame(exception, causeRef.get());
     }
 
     @Test
@@ -72,11 +122,11 @@ public class ChannelInitializerTest {
 
         client.handler(new ChannelInitializer<Channel>() {
             @Override
-            protected void initChannel(Channel ch) throws Exception {
+            protected void initChannel(Channel ch) {
                 ch.pipeline().addLast(handler1);
                 ch.pipeline().addLast(new ChannelInitializer<Channel>() {
                     @Override
-                    protected void initChannel(Channel ch) throws Exception {
+                    protected void initChannel(Channel ch) {
                         ch.pipeline().addLast(handler2);
                         ch.pipeline().addLast(handler3);
                     }
@@ -111,14 +161,14 @@ public class ChannelInitializerTest {
         final AtomicInteger registeredCalled = new AtomicInteger(0);
         final ChannelInboundHandlerAdapter handler1 = new ChannelInboundHandlerAdapter() {
             @Override
-            public void channelRegistered(ChannelHandlerContext ctx) throws Exception {
+            public void channelRegistered(ChannelHandlerContext ctx) {
                 registeredCalled.incrementAndGet();
             }
         };
         final AtomicInteger initChannelCalled = new AtomicInteger(0);
         client.handler(new ChannelInitializer<Channel>() {
             @Override
-            protected void initChannel(Channel ch) throws Exception {
+            protected void initChannel(Channel ch) {
                 initChannelCalled.incrementAndGet();
                 ch.pipeline().addLast(handler1);
                 ch.pipeline().fireChannelRegistered();
@@ -142,7 +192,8 @@ public class ChannelInitializerTest {
         }
     }
 
-    @Test(timeout = TIMEOUT_MILLIS)
+    @Test
+    @Timeout(value = TIMEOUT_MILLIS, unit = TimeUnit.MILLISECONDS)
     public void firstHandlerInPipelineShouldReceiveChannelRegisteredEvent() {
         testChannelRegisteredEventPropagation(new ChannelInitializer<LocalChannel>() {
             @Override
@@ -152,7 +203,8 @@ public class ChannelInitializerTest {
         });
     }
 
-    @Test(timeout = TIMEOUT_MILLIS)
+    @Test
+    @Timeout(value = TIMEOUT_MILLIS, unit = TimeUnit.MILLISECONDS)
     public void lastHandlerInPipelineShouldReceiveChannelRegisteredEvent() {
         testChannelRegisteredEventPropagation(new ChannelInitializer<LocalChannel>() {
             @Override
@@ -176,10 +228,10 @@ public class ChannelInitializerTest {
         final AtomicBoolean called = new AtomicBoolean();
         EmbeddedChannel channel = new EmbeddedChannel(new ChannelInitializer<Channel>() {
             @Override
-            protected void initChannel(Channel ch) throws Exception {
+            protected void initChannel(Channel ch) {
                 ChannelHandler handler = new ChannelInitializer<Channel>() {
                     @Override
-                    protected void initChannel(Channel ch) throws Exception {
+                    protected void initChannel(Channel ch) {
                         called.set(true);
                     }
                 };
@@ -205,6 +257,136 @@ public class ChannelInitializerTest {
             closeChannel(clientChannel);
             closeChannel(serverChannel);
         }
+    }
+
+    @SuppressWarnings("deprecation")
+    @Test
+    @Timeout(value = 10000, unit = TimeUnit.MILLISECONDS)
+    public void testChannelInitializerEventExecutor() throws Throwable {
+        final AtomicInteger invokeCount = new AtomicInteger();
+        final AtomicInteger completeCount = new AtomicInteger();
+        final AtomicReference<Throwable> errorRef = new AtomicReference<Throwable>();
+        LocalAddress addr = new LocalAddress(ChannelInitializerTest.class);
+
+        final EventExecutor executor = new DefaultEventLoop() {
+            private final ScheduledExecutorService execService = Executors.newSingleThreadScheduledExecutor();
+
+            @Override
+            public void shutdown() {
+                execService.shutdown();
+            }
+
+            @Override
+            public boolean inEventLoop(Thread thread) {
+                // Always return false which will ensure we always call execute(...)
+                return false;
+            }
+
+            @Override
+            public boolean isShuttingDown() {
+                return false;
+            }
+
+            @Override
+            public Future<?> shutdownGracefully(long quietPeriod, long timeout, TimeUnit unit) {
+                throw new IllegalStateException();
+            }
+
+            @Override
+            public Future<?> terminationFuture() {
+                throw new IllegalStateException();
+            }
+
+            @Override
+            public boolean isShutdown() {
+                return execService.isShutdown();
+            }
+
+            @Override
+            public boolean isTerminated() {
+                return execService.isTerminated();
+            }
+
+            @Override
+            public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+                return execService.awaitTermination(timeout, unit);
+            }
+
+            @Override
+            public void execute(Runnable command) {
+                execService.execute(command);
+            }
+        };
+
+        final CountDownLatch latch = new CountDownLatch(1);
+        ServerBootstrap serverBootstrap = new ServerBootstrap()
+                .channel(LocalServerChannel.class)
+                .group(group)
+                .localAddress(addr)
+                .childHandler(new ChannelInitializer<LocalChannel>() {
+                    @Override
+                    protected void initChannel(LocalChannel ch) {
+                        ch.pipeline().addLast(executor, new ChannelInitializer<Channel>() {
+                            @Override
+                            protected void initChannel(Channel ch) {
+                                invokeCount.incrementAndGet();
+                                ChannelHandlerContext ctx = ch.pipeline().context(this);
+                                assertNotNull(ctx);
+                                ch.pipeline().addAfter(ctx.executor(),
+                                        ctx.name(), null, new ChannelInboundHandlerAdapter() {
+                                            @Override
+                                            public void channelRead(ChannelHandlerContext ctx, Object msg)  {
+                                                // just drop on the floor.
+                                            }
+
+                                            @Override
+                                            public void handlerRemoved(ChannelHandlerContext ctx) {
+                                                latch.countDown();
+                                            }
+                                        });
+                                completeCount.incrementAndGet();
+                            }
+
+                            @Override
+                            public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+                                if (cause instanceof AssertionError) {
+                                    errorRef.set(cause);
+                                }
+                            }
+                        });
+                    }
+                });
+
+        Channel server = serverBootstrap.bind().sync().channel();
+
+        Bootstrap clientBootstrap = new Bootstrap()
+                .channel(LocalChannel.class)
+                .group(group)
+                .remoteAddress(addr)
+                .handler(new ChannelInboundHandlerAdapter());
+
+        Channel client = clientBootstrap.connect().sync().channel();
+        client.writeAndFlush("Hello World").sync();
+
+        client.close().sync();
+        server.close().sync();
+
+        client.closeFuture().sync();
+        server.closeFuture().sync();
+
+        // Wait until the handler is removed from the pipeline and so no more events are handled by it.
+        latch.await();
+
+        assertEquals(1, invokeCount.get());
+        assertEquals(invokeCount.get(), completeCount.get());
+
+        Throwable cause = errorRef.get();
+        if (cause != null) {
+            throw cause;
+        }
+
+        executor.shutdown();
+        assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
     }
 
     private static void closeChannel(Channel c) {

@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,16 +15,21 @@
  */
 package io.netty.resolver;
 
-import org.junit.Test;
+import io.netty.util.CharsetUtil;
+import io.netty.util.internal.ResourcesUtil;
+import org.junit.jupiter.api.Test;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.StringReader;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
+import java.nio.charset.Charset;
+import java.nio.charset.UnsupportedCharsetException;
 import java.util.Map;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 public class HostsFileParserTest {
 
@@ -48,16 +53,51 @@ public class HostsFileParserTest {
         Map<String, Inet4Address> inet4Entries = entries.inet4Entries();
         Map<String, Inet6Address> inet6Entries = entries.inet6Entries();
 
-        assertEquals("Expected 7 IPv4 entries", 7, inet4Entries.size());
-        assertEquals("Expected 1 IPv6 entries", 1, inet6Entries.size());
+        assertEquals(7, inet4Entries.size(), "Expected 7 IPv4 entries");
+        assertEquals(1, inet6Entries.size(), "Expected 1 IPv6 entries");
         assertEquals("127.0.0.1", inet4Entries.get("host1").getHostAddress());
         assertEquals("192.168.0.1", inet4Entries.get("host2").getHostAddress());
         assertEquals("192.168.0.2", inet4Entries.get("host3").getHostAddress());
         assertEquals("192.168.0.3", inet4Entries.get("host4").getHostAddress());
         assertEquals("192.168.0.3", inet4Entries.get("host5").getHostAddress());
         assertEquals("192.168.0.3", inet4Entries.get("host6").getHostAddress());
-        assertNotNull("uppercase host doesn't resolve", inet4Entries.get("host7"));
+        assertNotNull(inet4Entries.get("host7"), "uppercase host doesn't resolve");
         assertEquals("192.168.0.5", inet4Entries.get("host7").getHostAddress());
         assertEquals("0:0:0:0:0:0:0:1", inet6Entries.get("host1").getHostAddress());
+    }
+
+    @Test
+    public void testParseUnicode() throws IOException {
+        final Charset unicodeCharset;
+        try {
+            unicodeCharset = Charset.forName("unicode");
+        } catch (UnsupportedCharsetException e) {
+            return;
+        }
+        testParseFile(HostsFileParser.parse(
+                ResourcesUtil.getFile(getClass(),  "hosts-unicode"), unicodeCharset));
+    }
+
+    @Test
+    public void testParseMultipleCharsets() throws IOException {
+        final Charset unicodeCharset;
+        try {
+            unicodeCharset = Charset.forName("unicode");
+        } catch (UnsupportedCharsetException e) {
+            return;
+        }
+        testParseFile(HostsFileParser.parse(ResourcesUtil.getFile(getClass(),  "hosts-unicode"),
+                                            CharsetUtil.UTF_8, CharsetUtil.ISO_8859_1, unicodeCharset));
+    }
+
+    private static void testParseFile(HostsFileEntries entries) throws IOException {
+        Map<String, Inet4Address> inet4Entries = entries.inet4Entries();
+        Map<String, Inet6Address> inet6Entries = entries.inet6Entries();
+
+        assertEquals(2, inet4Entries.size(), "Expected 2 IPv4 entries");
+        assertEquals(1, inet6Entries.size(), "Expected 1 IPv6 entries");
+        assertEquals("127.0.0.1", inet4Entries.get("localhost").getHostAddress());
+        assertEquals("255.255.255.255", inet4Entries.get("broadcasthost").getHostAddress());
+        assertEquals("0:0:0:0:0:0:0:1", inet6Entries.get("localhost").getHostAddress());
     }
 }

@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -24,16 +24,73 @@
 #include <time.h>
 #include <sys/event.h>
 #include <sys/socket.h>
+#include <sys/sysctl.h>
 #include <sys/time.h>
-#include "netty_unix_filedescriptor.h"
-#include "netty_unix_socket.h"
-#include "netty_unix_errors.h"
-#include "netty_unix_util.h"
-#include "netty_unix_limits.h"
+
 #include "netty_kqueue_bsdsocket.h"
 #include "netty_kqueue_eventarray.h"
+#include "netty_unix_buffer.h"
+#include "netty_unix_errors.h"
+#include "netty_unix_filedescriptor.h"
+#include "netty_unix_jni.h"
+#include "netty_unix_limits.h"
+#include "netty_unix_socket.h"
+#include "netty_unix_util.h"
+#include "netty_unix.h"
 
-clockid_t waitClockId = 0; // initialized by netty_unix_util_initialize_wait_clock
+// Add define if NETTY_BUILD_STATIC is defined so it is picked up in netty_jni_util.c
+#ifdef NETTY_BUILD_STATIC
+#define NETTY_JNI_UTIL_BUILD_STATIC
+#endif
+
+#define STATICALLY_CLASSNAME "io/netty/channel/kqueue/KQueueStaticallyReferencedJniMethods"
+#define NATIVE_CLASSNAME "io/netty/channel/kqueue/Native"
+
+// Currently only macOS supports EVFILT_SOCK, and it is currently only available in internal APIs.
+// To make compiling easier we redefine the values here if they are not present.
+#ifdef __APPLE__
+#ifndef EVFILT_SOCK
+#define EVFILT_SOCK -13
+#endif /* EVFILT_SOCK */
+#ifndef NOTE_CONNRESET
+#define NOTE_CONNRESET 0x00000001
+#endif /* NOTE_CONNRESET */
+#ifndef NOTE_READCLOSED
+#define NOTE_READCLOSED 0x00000002
+#endif /* NOTE_READCLOSED */
+#ifndef NOTE_DISCONNECTED
+#define NOTE_DISCONNECTED 0x00001000
+#endif /* NOTE_DISCONNECTED */
+#ifndef CONNECT_RESUME_ON_READ_WRITE
+#define CONNECT_RESUME_ON_READ_WRITE 0x1
+#endif /* CONNECT_RESUME_ON_READ_WRITE */
+#ifndef CONNECT_DATA_IDEMPOTENT
+#define CONNECT_DATA_IDEMPOTENT 0x2
+#endif /* CONNECT_DATA_IDEMPOTENT */
+#else
+#ifndef EVFILT_SOCK
+#define EVFILT_SOCK 0 // Disabled
+#endif /* EVFILT_SOCK */
+#ifndef NOTE_CONNRESET
+#define NOTE_CONNRESET 0
+#endif /* NOTE_CONNRESET */
+#ifndef NOTE_READCLOSED
+#define NOTE_READCLOSED 0
+#endif /* NOTE_READCLOSED */
+#ifndef NOTE_DISCONNECTED
+#define NOTE_DISCONNECTED 0
+#endif /* NOTE_DISCONNECTED */
+#ifndef CONNECT_RESUME_ON_READ_WRITE
+#define CONNECT_RESUME_ON_READ_WRITE 0
+#endif /* CONNECT_RESUME_ON_READ_WRITE */
+#ifndef CONNECT_DATA_IDEMPOTENT
+#define CONNECT_DATA_IDEMPOTENT 0
+#endif /* CONNECT_DATA_IDEMPOTENT */
+#endif /* __APPLE__ */
+
+static clockid_t waitClockId = 0; // initialized by netty_unix_util_initialize_wait_clock
+static const char* staticPackagePrefix = NULL;
+static int register_unix_called = 0;
 
 static jint netty_kqueue_native_kqueueCreate(JNIEnv* env, jclass clazz) {
     jint kq = kqueue();
@@ -77,11 +134,10 @@ static jint netty_kqueue_native_keventWait(JNIEnv* env, jclass clazz, jint kqueu
     timeoutTs.tv_sec = tvSec;
     timeoutTs.tv_nsec = tvNsec;
 
-    // Negatives = wait indefinitely, Zeros = poll (aka return immediately).
-    if ((tvSec == 0 && tvNsec == 0) || tvSec < 0 || tvNsec < 0) {
-        const struct timespec* fixedTs = (tvSec == 0 && tvNsec == 0) ? &timeoutTs : NULL;
+    if (tvSec == 0 && tvNsec == 0) {
+        // Zeros = poll (aka return immediately).
         for (;;) {
-            result = kevent(kqueueFd, changeList, changeListLength, eventList, eventListLength, fixedTs);
+            result = kevent(kqueueFd, changeList, changeListLength, eventList, eventListLength, &timeoutTs);
             if (result >= 0) {
                 return result;
             }
@@ -107,20 +163,21 @@ static jint netty_kqueue_native_keventWait(JNIEnv* env, jclass clazz, jint kqueu
         }
 
         netty_unix_util_clock_gettime(waitClockId, &nowTs);
-        // beforeTs will store the time difference to check for overflow
-        beforeTs.tv_sec = nowTs.tv_sec - beforeTs.tv_sec;
-        beforeTs.tv_nsec = nowTs.tv_nsec - beforeTs.tv_nsec;
-        // Now subtract the time difference
-        timeoutTs.tv_sec -= beforeTs.tv_sec;
-        timeoutTs.tv_nsec -= beforeTs.tv_nsec;
-        if (beforeTs.tv_sec < 0 || beforeTs.tv_nsec < 0 || (timeoutTs.tv_sec <= 0 && timeoutTs.tv_nsec <= 0)) {
+        if (netty_unix_util_timespec_subtract_ns(&timeoutTs,
+              netty_unix_util_timespec_elapsed_ns(&beforeTs, &nowTs))) {
             return 0;
         }
+
         beforeTs = nowTs;
         // https://www.freebsd.org/cgi/man.cgi?query=kqueue&sektion=2
         // When kevent() call fails with EINTR error, all changes in the changelist have been applied.
         changeListLength = 0;
     }
+}
+
+static jint netty_kqueue_native_registerUnix(JNIEnv* env, jclass clazz) {
+    register_unix_called = 1;
+    return netty_unix_register(env, staticPackagePrefix);
 }
 
 static jint netty_kqueue_native_sizeofKEvent(JNIEnv* env, jclass clazz) {
@@ -147,6 +204,10 @@ static jint netty_kqueue_native_offsetofKeventData(JNIEnv* env, jclass clazz) {
     return offsetof(struct kevent, data);
 }
 
+static jint netty_kqueue_native_offsetofKeventUdata(JNIEnv* env, jclass clazz) {
+    return offsetof(struct kevent, udata);
+}
+
 static jshort netty_kqueue_native_evfiltRead(JNIEnv* env, jclass clazz) {
     return EVFILT_READ;
 }
@@ -157,6 +218,10 @@ static jshort netty_kqueue_native_evfiltWrite(JNIEnv* env, jclass clazz) {
 
 static jshort netty_kqueue_native_evfiltUser(JNIEnv* env, jclass clazz) {
     return EVFILT_USER;
+}
+
+static jshort netty_kqueue_native_evfiltSock(JNIEnv* env, jclass clazz) {
+    return EVFILT_SOCK;
 }
 
 static jshort netty_kqueue_native_evAdd(JNIEnv* env, jclass clazz) {
@@ -187,18 +252,102 @@ static jshort netty_kqueue_native_evError(JNIEnv* env, jclass clazz) {
    return EV_ERROR;
 }
 
+static jshort netty_kqueue_native_noteConnReset(JNIEnv* env, jclass clazz) {
+   return NOTE_CONNRESET;
+}
+
+static jshort netty_kqueue_native_noteReadClosed(JNIEnv* env, jclass clazz) {
+   return NOTE_READCLOSED;
+}
+
+static jshort netty_kqueue_native_noteDisconnected(JNIEnv* env, jclass clazz) {
+   return NOTE_DISCONNECTED;
+}
+
+static jint netty_kqueue_bsdsocket_connectResumeOnReadWrite(JNIEnv *env, jclass clazz) {
+    return CONNECT_RESUME_ON_READ_WRITE;
+}
+
+static jint netty_kqueue_bsdsocket_connectDataIdempotent(JNIEnv *env, jclass clazz) {
+    return CONNECT_DATA_IDEMPOTENT;
+}
+
+static jint netty_kqueue_bsdsocket_fastOpenClient(JNIEnv *env, jclass clazz) {
+#ifdef __APPLE__
+    unsigned int value = 0;
+    size_t len = sizeof(value);
+    if (sysctlbyname("net.inet.tcp.fastopen", &value, &len, NULL, 0) != 0) {
+        int err = errno;
+        netty_unix_errors_throwRuntimeExceptionErrorNo(env, "sysctlbyname failed", err);
+        return -err;
+    }
+    if ((value & 2) == 2) {
+        return 1;
+    }
+    return 0;
+#else
+    unsigned int value = 0;
+    size_t len = sizeof(value);
+    if (sysctlbyname("net.inet.tcp.fastopen.client_enable", &value, &len, NULL, 0) != 0) {
+        int err = errno;
+        netty_unix_errors_throwRuntimeExceptionErrorNo(env, "sysctlbyname failed", err);
+        return -err;
+    }
+    if (value) {
+        return 1;
+    }
+    return 0;
+#endif // __APPLE__
+}
+
+static jint netty_kqueue_bsdsocket_fastOpenServer(JNIEnv *env, jclass clazz) {
+#ifdef __APPLE__
+    unsigned int value = 0;
+    size_t len = sizeof(value);
+    if (sysctlbyname("net.inet.tcp.fastopen", &value, &len, NULL, 0) != 0) {
+        int err = errno;
+        netty_unix_errors_throwRuntimeExceptionErrorNo(env, "sysctlbyname failed", err);
+        return -err;
+    }
+    if ((value & 1) == 1) {
+        return 1;
+    }
+    return 0;
+#else
+    unsigned int value = 0;
+    size_t len = sizeof(value);
+    if (sysctlbyname("net.inet.tcp.fastopen.server_enable", &value, &len, NULL, 0) != 0) {
+        int err = errno;
+        netty_unix_errors_throwRuntimeExceptionErrorNo(env, "sysctlbyname failed", err);
+        return -err;
+    }
+    if (value) {
+        return 1;
+    }
+    return 0;
+#endif // __APPLE__
+}
+
 // JNI Method Registration Table Begin
 static const JNINativeMethod statically_referenced_fixed_method_table[] = {
   { "evfiltRead", "()S", (void *) netty_kqueue_native_evfiltRead },
   { "evfiltWrite", "()S", (void *) netty_kqueue_native_evfiltWrite },
   { "evfiltUser", "()S", (void *) netty_kqueue_native_evfiltUser },
+  { "evfiltSock", "()S", (void *) netty_kqueue_native_evfiltSock },
   { "evAdd", "()S", (void *) netty_kqueue_native_evAdd },
   { "evEnable", "()S", (void *) netty_kqueue_native_evEnable },
   { "evDisable", "()S", (void *) netty_kqueue_native_evDisable },
   { "evDelete", "()S", (void *) netty_kqueue_native_evDelete },
   { "evClear", "()S", (void *) netty_kqueue_native_evClear },
   { "evEOF", "()S", (void *) netty_kqueue_native_evEOF },
-  { "evError", "()S", (void *) netty_kqueue_native_evError }
+  { "evError", "()S", (void *) netty_kqueue_native_evError },
+  { "noteReadClosed", "()S", (void *) netty_kqueue_native_noteReadClosed },
+  { "noteConnReset", "()S", (void *) netty_kqueue_native_noteConnReset },
+  { "noteDisconnected", "()S", (void *) netty_kqueue_native_noteDisconnected },
+  { "connectResumeOnReadWrite", "()I", (void *) netty_kqueue_bsdsocket_connectResumeOnReadWrite },
+  { "connectDataIdempotent", "()I", (void *) netty_kqueue_bsdsocket_connectDataIdempotent },
+  { "fastOpenClient", "()I", (void *) netty_kqueue_bsdsocket_fastOpenClient },
+  { "fastOpenServer", "()I", (void *) netty_kqueue_bsdsocket_fastOpenServer }
 };
 static const jint statically_referenced_fixed_method_table_size = sizeof(statically_referenced_fixed_method_table) / sizeof(statically_referenced_fixed_method_table[0]);
 static const JNINativeMethod fixed_method_table[] = {
@@ -211,97 +360,110 @@ static const JNINativeMethod fixed_method_table[] = {
   { "offsetofKEventFlags", "()I", (void *) netty_kqueue_native_offsetofKEventFlags },
   { "offsetofKEventFFlags", "()I", (void *) netty_kqueue_native_offsetofKEventFFlags },
   { "offsetofKEventFilter", "()I", (void *) netty_kqueue_native_offsetofKEventFilter },
-  { "offsetofKeventData", "()I", (void *) netty_kqueue_native_offsetofKeventData }
+  { "offsetofKeventData", "()I", (void *) netty_kqueue_native_offsetofKeventData },
+  { "offsetofKeventUdata", "()I", (void *) netty_kqueue_native_offsetofKeventUdata },
+  { "registerUnix", "()I", (void *) netty_kqueue_native_registerUnix }
 };
 static const jint fixed_method_table_size = sizeof(fixed_method_table) / sizeof(fixed_method_table[0]);
 // JNI Method Registration Table End
 
+// IMPORTANT: If you add any NETTY_JNI_UTIL_LOAD_CLASS or NETTY_JNI_UTIL_FIND_CLASS calls you also need to update
+//            Native to reflect that.
 static jint netty_kqueue_native_JNI_OnLoad(JNIEnv* env, const char* packagePrefix) {
+    int staticallyRegistered = 0;
+    int nativeRegistered = 0;
+    int bsdsocketOnLoadCalled = 0;
+    int eventarrayOnLoadCalled = 0;
+
     // We must register the statically referenced methods first!
-    if (netty_unix_util_register_natives(env,
+    if (netty_jni_util_register_natives(env,
             packagePrefix,
-            "io/netty/channel/kqueue/KQueueStaticallyReferencedJniMethods",
+            STATICALLY_CLASSNAME,
             statically_referenced_fixed_method_table,
             statically_referenced_fixed_method_table_size) != 0) {
-        return JNI_ERR;
+        goto error;
     }
+    staticallyRegistered = 1;
+
     // Register the methods which are not referenced by static member variables
-    if (netty_unix_util_register_natives(env, packagePrefix, "io/netty/channel/kqueue/Native", fixed_method_table, fixed_method_table_size) != 0) {
-        return JNI_ERR;
+    if (netty_jni_util_register_natives(env, packagePrefix, NATIVE_CLASSNAME, fixed_method_table, fixed_method_table_size) != 0) {
+        goto error;
     }
-    // Load all c modules that we depend upon
-    if (netty_unix_limits_JNI_OnLoad(env, packagePrefix) == JNI_ERR) {
-        return JNI_ERR;
-    }
-    if (netty_unix_errors_JNI_OnLoad(env, packagePrefix) == JNI_ERR) {
-        return JNI_ERR;
-    }
-    if (netty_unix_filedescriptor_JNI_OnLoad(env, packagePrefix) == JNI_ERR) {
-        return JNI_ERR;
-    }
-    if (netty_unix_socket_JNI_OnLoad(env, packagePrefix) == JNI_ERR) {
-        return JNI_ERR;
-    }
+    nativeRegistered = 1;
+
     if (netty_kqueue_bsdsocket_JNI_OnLoad(env, packagePrefix) == JNI_ERR) {
-        return JNI_ERR;
+        goto error;
     }
+    bsdsocketOnLoadCalled = 1;
+
     if (netty_kqueue_eventarray_JNI_OnLoad(env, packagePrefix) == JNI_ERR) {
-        return JNI_ERR;
+        goto error;
     }
+    eventarrayOnLoadCalled = 1;
+
     // Initialize this module
 
     if (!netty_unix_util_initialize_wait_clock(&waitClockId)) {
-      fprintf(stderr, "FATAL: could not find a clock for clock_gettime!\n");
-      return JNI_ERR;
+        fprintf(stderr, "FATAL: could not find a clock for clock_gettime!\n");
+        fflush(stderr);
+        goto error;
     }
 
-    return JNI_VERSION_1_6;
+    staticPackagePrefix = packagePrefix;
+    return NETTY_JNI_UTIL_JNI_VERSION;
+error:
+   if (staticallyRegistered == 1) {
+        netty_jni_util_unregister_natives(env, packagePrefix, STATICALLY_CLASSNAME);
+   }
+   if (nativeRegistered == 1) {
+        netty_jni_util_unregister_natives(env, packagePrefix, NATIVE_CLASSNAME);
+   }
+   if (bsdsocketOnLoadCalled == 1) {
+       netty_kqueue_bsdsocket_JNI_OnUnLoad(env, packagePrefix);
+   }
+   if (eventarrayOnLoadCalled == 1) {
+       netty_kqueue_eventarray_JNI_OnUnLoad(env, packagePrefix);
+   }
+   return JNI_ERR;
 }
 
-static void netty_kqueue_native_JNI_OnUnLoad(JNIEnv* env) {
-    netty_unix_limits_JNI_OnUnLoad(env);
-    netty_unix_errors_JNI_OnUnLoad(env);
-    netty_unix_filedescriptor_JNI_OnUnLoad(env);
-    netty_unix_socket_JNI_OnUnLoad(env);
-    netty_kqueue_bsdsocket_JNI_OnUnLoad(env);
-    netty_kqueue_eventarray_JNI_OnUnLoad(env);
+static void netty_kqueue_native_JNI_OnUnload(JNIEnv* env) {
+    netty_kqueue_bsdsocket_JNI_OnUnLoad(env, staticPackagePrefix);
+    netty_kqueue_eventarray_JNI_OnUnLoad(env, staticPackagePrefix);
+
+    if (register_unix_called == 1) {
+        register_unix_called = 0;
+        netty_unix_unregister(env, staticPackagePrefix);
+    }
+
+    netty_jni_util_unregister_natives(env, staticPackagePrefix, STATICALLY_CLASSNAME);
+    netty_jni_util_unregister_natives(env, staticPackagePrefix, NATIVE_CLASSNAME);
+
+    if (staticPackagePrefix != NULL) {
+        free((void *) staticPackagePrefix);
+        staticPackagePrefix = NULL;
+    }
 }
 
-jint JNI_OnLoad(JavaVM* vm, void* reserved) {
-    JNIEnv* env;
-    if ((*vm)->GetEnv(vm, (void**) &env, JNI_VERSION_1_6) != JNI_OK) {
-        return JNI_ERR;
-    }
+// We build with -fvisibility=hidden so ensure we mark everything that needs to be visible with JNIEXPORT
+// https://mail.openjdk.java.net/pipermail/core-libs-dev/2013-February/014549.html
 
-    Dl_info dlinfo;
-    jint status = 0;
-    // We need to use an address of a function that is uniquely part of this library, so choose a static
-    // function. See https://github.com/netty/netty/issues/4840.
-    if (!dladdr((void*) netty_kqueue_native_JNI_OnUnLoad, &dlinfo)) {
-        fprintf(stderr, "FATAL: transport-native-kqueue JNI call to dladdr failed!\n");
-        return JNI_ERR;
-    }
-    char* packagePrefix = netty_unix_util_parse_package_prefix(dlinfo.dli_fname, "netty-transport-native-kqueue", &status);
-    if (status == JNI_ERR) {
-        fprintf(stderr, "FATAL: transport-native-kqueue JNI encountered unexpected dlinfo.dli_fname: %s\n", dlinfo.dli_fname);
-        return JNI_ERR;
-    }
-
-    jint ret = netty_kqueue_native_JNI_OnLoad(env, packagePrefix);
-
-    if (packagePrefix != NULL) {
-      free(packagePrefix);
-      packagePrefix = NULL;
-    }
-
-    return ret;
+// Invoked by the JVM when statically linked
+JNIEXPORT jint JNI_OnLoad_netty_transport_native_kqueue(JavaVM* vm, void* reserved) {
+    return netty_jni_util_JNI_OnLoad(vm, reserved, "netty_transport_native_kqueue", netty_kqueue_native_JNI_OnLoad);
 }
 
-void JNI_OnUnload(JavaVM* vm, void* reserved) {
-    JNIEnv* env;
-    if ((*vm)->GetEnv(vm, (void**) &env, JNI_VERSION_1_6) != JNI_OK) {
-        // Something is wrong but nothing we can do about this :(
-        return;
-    }
-    netty_kqueue_native_JNI_OnUnLoad(env);
+// Invoked by the JVM when statically linked
+JNIEXPORT void JNI_OnUnload_netty_transport_native_kqueue(JavaVM* vm, void* reserved) {
+    netty_jni_util_JNI_OnUnload(vm, reserved, netty_kqueue_native_JNI_OnUnload);
 }
+
+#ifndef NETTY_BUILD_STATIC
+JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
+    return netty_jni_util_JNI_OnLoad(vm, reserved, "netty_transport_native_kqueue", netty_kqueue_native_JNI_OnLoad);
+}
+
+JNIEXPORT void JNI_OnUnload(JavaVM* vm, void* reserved) {
+    netty_jni_util_JNI_OnUnload(vm, reserved, netty_kqueue_native_JNI_OnUnload);
+}
+#endif /* NETTY_BUILD_STATIC */

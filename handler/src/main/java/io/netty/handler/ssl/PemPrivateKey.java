@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -41,6 +41,7 @@ import io.netty.util.internal.ObjectUtil;
  * @see #valueOf(ByteBuf)
  */
 public final class PemPrivateKey extends AbstractReferenceCounted implements PrivateKey, PemEncoded {
+    private static final long serialVersionUID = 7978017465645018936L;
 
     private static final byte[] BEGIN_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\n".getBytes(CharsetUtil.US_ASCII);
     private static final byte[] END_PRIVATE_KEY = "\n-----END PRIVATE KEY-----\n".getBytes(CharsetUtil.US_ASCII);
@@ -59,7 +60,16 @@ public final class PemPrivateKey extends AbstractReferenceCounted implements Pri
             return ((PemEncoded) key).retain();
         }
 
-        ByteBuf encoded = Unpooled.wrappedBuffer(key.getEncoded());
+        byte[] bytes = key.getEncoded();
+        if (bytes == null) {
+            throw new IllegalArgumentException(key.getClass().getName() + " does not support encoding");
+        }
+
+        return toPEM(allocator, useDirect, bytes);
+    }
+
+    static PemEncoded toPEM(ByteBufAllocator allocator, boolean useDirect, byte[] bytes) {
+        ByteBuf encoded = Unpooled.wrappedBuffer(bytes);
         try {
             ByteBuf base64 = SslUtils.toBase64(allocator, encoded);
             try {
@@ -201,6 +211,7 @@ public final class PemPrivateKey extends AbstractReferenceCounted implements Pri
      *
      * @see Destroyable#destroy()
      */
+    @Override
     public void destroy() {
         release(refCnt());
     }
@@ -212,6 +223,7 @@ public final class PemPrivateKey extends AbstractReferenceCounted implements Pri
      *
      * @see Destroyable#isDestroyed()
      */
+    @Override
     public boolean isDestroyed() {
         return refCnt() == 0;
     }

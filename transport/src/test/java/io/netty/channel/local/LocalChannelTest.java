@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -21,15 +21,19 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.AbstractChannel;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFactory;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.DefaultEventLoopGroup;
+import io.netty.channel.DefaultMaxMessagesRecvByteBufAllocator;
 import io.netty.channel.EventLoop;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.ServerChannel;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.SingleThreadEventLoop;
 import io.netty.util.ReferenceCountUtil;
@@ -37,43 +41,53 @@ import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.Promise;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.function.Executable;
 
 import java.net.ConnectException;
+import java.nio.channels.AlreadyConnectedException;
 import java.nio.channels.ClosedChannelException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static org.hamcrest.CoreMatchers.instanceOf;
-import static org.hamcrest.CoreMatchers.is;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 public class LocalChannelTest {
 
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(LocalChannelTest.class);
 
-    private static final LocalAddress TEST_ADDRESS = new LocalAddress("test.id");
+    private static final LocalAddress TEST_ADDRESS = new LocalAddress(LocalChannelTest.class);
 
     private static EventLoopGroup group1;
     private static EventLoopGroup group2;
     private static EventLoopGroup sharedGroup;
 
-    @BeforeClass
+    @BeforeAll
     public static void beforeClass() {
         group1 = new DefaultEventLoopGroup(2);
         group2 = new DefaultEventLoopGroup(2);
         sharedGroup = new DefaultEventLoopGroup(1);
     }
 
-    @AfterClass
+    @AfterAll
     public static void afterClass() throws InterruptedException {
         Future<?> group1Future = group1.shutdownGracefully(0, 0, SECONDS);
         Future<?> group2Future = group2.shutdownGracefully(0, 0, SECONDS);
@@ -127,9 +141,9 @@ public class LocalChannelTest {
                 closeChannel(sc);
                 sc.closeFuture().sync();
 
-                assertNull(String.format(
+                assertNull(LocalChannelRegistry.get(TEST_ADDRESS), String.format(
                         "Expected null, got channel '%s' for local address '%s'",
-                        LocalChannelRegistry.get(TEST_ADDRESS), TEST_ADDRESS), LocalChannelRegistry.get(TEST_ADDRESS));
+                        LocalChannelRegistry.get(TEST_ADDRESS), TEST_ADDRESS));
             } finally {
                 closeChannel(cc);
                 closeChannel(sc);
@@ -166,19 +180,19 @@ public class LocalChannelTest {
 
             // Close the channel and write something.
             cc.close().sync();
-            try {
-                cc.writeAndFlush(new Object()).sync();
-                fail("must raise a ClosedChannelException");
-            } catch (Exception e) {
-                assertThat(e, is(instanceOf(ClosedChannelException.class)));
-                // Ensure that the actual write attempt on a closed channel was never made by asserting that
-                // the ClosedChannelException has been created by AbstractUnsafe rather than transport implementations.
-                if (e.getStackTrace().length > 0) {
-                    assertThat(
-                            e.getStackTrace()[0].getClassName(), is(AbstractChannel.class.getName() +
-                                    "$AbstractUnsafe"));
-                    e.printStackTrace();
+            final Channel finalCc = cc;
+            Exception e = assertThrows(Exception.class, new Executable() {
+                @Override
+                public void execute() throws Throwable {
+                    finalCc.writeAndFlush(new Object()).sync();
                 }
+            });
+            assertInstanceOf(ClosedChannelException.class, e);
+            // Ensure that the actual write attempt on a closed channel was never made by asserting that
+            // the ClosedChannelException has been created by AbstractUnsafe rather than transport implementations.
+            if (e.getStackTrace().length > 0) {
+               assertEquals(AbstractChannel.class.getName() +
+                       "$AbstractUnsafe", e.getStackTrace()[0].getClassName());
             }
         } finally {
             closeChannel(cc);
@@ -280,7 +294,7 @@ public class LocalChannelTest {
                         }
                     });
             ChannelFuture future = bootstrap.connect(sc.localAddress());
-            assertTrue("Connection should finish, not time out", future.await(200));
+            assertTrue(future.await(2000), "Connection should finish, not time out");
             cc = future.channel();
         } finally {
             closeChannel(cc);
@@ -391,12 +405,81 @@ public class LocalChannelTest {
     }
 
     @Test
+    public void testCloseAfterWriteInSameEventLoopPreservesOrder() throws InterruptedException {
+        Bootstrap cb = new Bootstrap();
+        ServerBootstrap sb = new ServerBootstrap();
+        final CountDownLatch messageLatch = new CountDownLatch(3);
+        final ByteBuf data = Unpooled.wrappedBuffer(new byte[1024]);
+
+        try {
+            cb.group(sharedGroup)
+                    .channel(LocalChannel.class)
+                    .handler(new ChannelInboundHandlerAdapter() {
+                        @Override
+                        public void channelActive(ChannelHandlerContext ctx) throws Exception {
+                            ctx.writeAndFlush(data.retainedDuplicate());
+                        }
+
+                        @Override
+                        public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                            if (data.equals(msg)) {
+                                ReferenceCountUtil.safeRelease(msg);
+                                messageLatch.countDown();
+                            } else {
+                                super.channelRead(ctx, msg);
+                            }
+                        }
+                    });
+
+            sb.group(sharedGroup)
+                    .channel(LocalServerChannel.class)
+                    .childHandler(new ChannelInboundHandlerAdapter() {
+                        @Override
+                        public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                            if (data.equals(msg)) {
+                                messageLatch.countDown();
+                                ctx.writeAndFlush(data.retainedDuplicate());
+                                ctx.close();
+                            } else {
+                                super.channelRead(ctx, msg);
+                            }
+                        }
+
+                        @Override
+                        public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+                            messageLatch.countDown();
+                            super.channelInactive(ctx);
+                        }
+                    });
+
+            Channel sc = null;
+            Channel cc = null;
+            try {
+                // Start server
+                sc = sb.bind(TEST_ADDRESS).syncUninterruptibly().channel();
+
+                // Connect to the server
+                cc = cb.connect(sc.localAddress()).syncUninterruptibly().channel();
+                assertTrue(messageLatch.await(5, SECONDS));
+                assertFalse(cc.isOpen());
+            } finally {
+                closeChannel(cc);
+                closeChannel(sc);
+            }
+        } finally {
+            data.release();
+        }
+    }
+
+    @Test
     public void testWriteInWritePromiseCompletePreservesOrder() throws InterruptedException {
         Bootstrap cb = new Bootstrap();
         ServerBootstrap sb = new ServerBootstrap();
         final CountDownLatch messageLatch = new CountDownLatch(2);
-        final ByteBuf data = Unpooled.wrappedBuffer(new byte[1024]);
-        final ByteBuf data2 = Unpooled.wrappedBuffer(new byte[512]);
+        final ByteBuf data = Unpooled.buffer();
+        final ByteBuf data2 = Unpooled.buffer();
+        data.writeInt(Integer.BYTES).writeInt(2);
+        data2.writeInt(Integer.BYTES).writeInt(1);
 
         try {
             cb.group(group1)
@@ -408,10 +491,20 @@ public class LocalChannelTest {
             .childHandler(new ChannelInboundHandlerAdapter() {
                 @Override
                 public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-                    final long count = messageLatch.getCount();
-                    if ((data.equals(msg) && count == 2) || (data2.equals(msg) && count == 1)) {
-                        ReferenceCountUtil.safeRelease(msg);
-                        messageLatch.countDown();
+                    if (msg instanceof ByteBuf) {
+                        ByteBuf buf = (ByteBuf) msg;
+                        while (buf.isReadable()) {
+                            int size = buf.readInt();
+                            ByteBuf slice = buf.readRetainedSlice(size);
+                            try {
+                                if (slice.readInt() == messageLatch.getCount()) {
+                                    messageLatch.countDown();
+                                }
+                            } finally {
+                                slice.release();
+                            }
+                        }
+                        buf.release();
                     } else {
                         super.channelRead(ctx, msg);
                     }
@@ -621,85 +714,6 @@ public class LocalChannelTest {
     }
 
     @Test
-    public void testClosePeerInWritePromiseCompleteSameEventLoopPreservesOrder() throws InterruptedException {
-        Bootstrap cb = new Bootstrap();
-        ServerBootstrap sb = new ServerBootstrap();
-        final CountDownLatch messageLatch = new CountDownLatch(2);
-        final CountDownLatch serverChannelLatch = new CountDownLatch(1);
-        final ByteBuf data = Unpooled.wrappedBuffer(new byte[1024]);
-        final AtomicReference<Channel> serverChannelRef = new AtomicReference<Channel>();
-
-        try {
-            cb.group(sharedGroup)
-            .channel(LocalChannel.class)
-            .handler(new TestHandler());
-
-            sb.group(sharedGroup)
-            .channel(LocalServerChannel.class)
-            .childHandler(new ChannelInitializer<LocalChannel>() {
-                @Override
-                public void initChannel(LocalChannel ch) throws Exception {
-                    ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
-                        @Override
-                        public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-                            if (msg.equals(data)) {
-                                ReferenceCountUtil.safeRelease(msg);
-                                messageLatch.countDown();
-                            } else {
-                                super.channelRead(ctx, msg);
-                            }
-                        }
-                        @Override
-                        public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-                            messageLatch.countDown();
-                            super.channelInactive(ctx);
-                        }
-                    });
-                    serverChannelRef.set(ch);
-                    serverChannelLatch.countDown();
-                }
-            });
-
-            Channel sc = null;
-            Channel cc = null;
-            try {
-                // Start server
-                sc = sb.bind(TEST_ADDRESS).syncUninterruptibly().channel();
-
-                // Connect to the server
-                cc = cb.connect(sc.localAddress()).syncUninterruptibly().channel();
-
-                assertTrue(serverChannelLatch.await(5, SECONDS));
-
-                final Channel ccCpy = cc;
-                // Make sure a write operation is executed in the eventloop
-                cc.pipeline().lastContext().executor().execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        ChannelPromise promise = ccCpy.newPromise();
-                        promise.addListener(new ChannelFutureListener() {
-                            @Override
-                            public void operationComplete(ChannelFuture future) throws Exception {
-                                serverChannelRef.get().close();
-                            }
-                        });
-                        ccCpy.writeAndFlush(data.retainedDuplicate(), promise);
-                    }
-                });
-
-                assertTrue(messageLatch.await(5, SECONDS));
-                assertFalse(cc.isOpen());
-                assertFalse(serverChannelRef.get().isOpen());
-            } finally {
-                closeChannel(cc);
-                closeChannel(sc);
-            }
-        } finally {
-            data.release();
-        }
-    }
-
-    @Test
     public void testWriteWhilePeerIsClosedReleaseObjectAndFailPromise() throws InterruptedException {
         Bootstrap cb = new Bootstrap();
         ServerBootstrap sb = new ServerBootstrap();
@@ -812,7 +826,8 @@ public class LocalChannelTest {
         }
     }
 
-    @Test(timeout = 3000)
+    @Test
+    @Timeout(value = 3000, unit = TimeUnit.MILLISECONDS)
     public void testConnectFutureBeforeChannelActive() throws Exception {
         Bootstrap cb = new Bootstrap();
         ServerBootstrap sb = new ServerBootstrap();
@@ -863,13 +878,60 @@ public class LocalChannelTest {
         }
     }
 
-    @Test(expected = ConnectException.class)
+    @Test
     public void testConnectionRefused() {
-        Bootstrap sb = new Bootstrap();
+        final Bootstrap sb = new Bootstrap();
         sb.group(group1)
         .channel(LocalChannel.class)
-        .handler(new TestHandler())
-        .connect(LocalAddress.ANY).syncUninterruptibly();
+        .handler(new TestHandler());
+        assertThrows(ConnectException.class, new Executable() {
+            @Override
+            public void execute() {
+                sb.connect(LocalAddress.ANY).syncUninterruptibly();
+            }
+        });
+    }
+
+    @Test
+    public void testConnectedAlready() throws Exception {
+        Bootstrap cb = new Bootstrap();
+        ServerBootstrap sb = new ServerBootstrap();
+        final AtomicReference<Throwable> causeRef = new AtomicReference<Throwable>();
+        cb.group(group1)
+                .channel(LocalChannel.class)
+                .handler(new ChannelInboundHandlerAdapter() {
+                    @Override
+                    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+                        causeRef.set(cause);
+                    }
+                });
+
+        sb.group(group2)
+                .channel(LocalServerChannel.class)
+                .childHandler(new ChannelInitializer<LocalChannel>() {
+                    @Override
+                    public void initChannel(LocalChannel ch) throws Exception {
+                        ch.pipeline().addLast(new TestHandler());
+                    }
+                });
+
+        Channel sc = null;
+        Channel cc = null;
+        try {
+            // Start server
+            sc = sb.bind(TEST_ADDRESS).sync().channel();
+
+            // Connect to the server
+            cc = cb.connect(sc.localAddress()).sync().channel();
+
+            ChannelFuture f = cc.connect(sc.localAddress()).awaitUninterruptibly();
+            assertInstanceOf(AlreadyConnectedException.class, f.cause());
+            cc.close().syncUninterruptibly();
+            assertNull(causeRef.get());
+        } finally {
+            closeChannel(cc);
+            closeChannel(sc);
+        }
     }
 
     private static final class LatchChannelFutureListener extends CountDownLatch implements ChannelFutureListener {
@@ -955,6 +1017,850 @@ public class LocalChannelTest {
         } finally {
             closeChannel(cc);
             closeChannel(sc);
+        }
+    }
+
+    private static void writeAndFlushReadOnSuccess(final ChannelHandlerContext ctx, Object msg) {
+        ctx.writeAndFlush(msg).addListener(new ChannelFutureListener() {
+            @Override
+            public void operationComplete(ChannelFuture future) {
+                if (future.isSuccess()) {
+                    ctx.read();
+                }
+            }
+        });
+    }
+
+    @Test
+    @Timeout(value = 5000, unit = TimeUnit.MILLISECONDS)
+    public void testAutoReadDisabledSharedGroup() throws Exception {
+        testAutoReadDisabled(sharedGroup, sharedGroup);
+    }
+
+    @Test
+    @Timeout(value = 5000, unit = TimeUnit.MILLISECONDS)
+    public void testAutoReadDisabledDifferentGroup() throws Exception {
+        testAutoReadDisabled(group1, group2);
+    }
+
+    private static void testAutoReadDisabled(EventLoopGroup serverGroup, EventLoopGroup clientGroup) throws Exception {
+        final CountDownLatch latch = new CountDownLatch(100);
+        Bootstrap cb = new Bootstrap();
+        ServerBootstrap sb = new ServerBootstrap();
+
+        cb.group(serverGroup)
+                .channel(LocalChannel.class)
+                .option(ChannelOption.AUTO_READ, false)
+                .handler(new ChannelInboundHandlerAdapter() {
+
+                    @Override
+                    public void channelActive(final ChannelHandlerContext ctx) throws Exception {
+                        writeAndFlushReadOnSuccess(ctx, "test");
+                    }
+
+                    @Override
+                    public void channelRead(final ChannelHandlerContext ctx, Object msg) throws Exception {
+                        writeAndFlushReadOnSuccess(ctx, msg);
+                    }
+                });
+
+        sb.group(clientGroup)
+                .channel(LocalServerChannel.class)
+                .childOption(ChannelOption.AUTO_READ, false)
+                .childHandler(new ChannelInboundHandlerAdapter() {
+                    @Override
+                    public void channelActive(final ChannelHandlerContext ctx) throws Exception {
+                        ctx.read();
+                    }
+
+                    @Override
+                    public void channelRead(final ChannelHandlerContext ctx, Object msg) throws Exception {
+                        latch.countDown();
+                        if (latch.getCount() > 0) {
+                            writeAndFlushReadOnSuccess(ctx, msg);
+                        }
+                    }
+                });
+
+        Channel sc = null;
+        Channel cc = null;
+        try {
+            // Start server
+            sc = sb.bind(TEST_ADDRESS).sync().channel();
+            cc = cb.connect(TEST_ADDRESS).sync().channel();
+
+            latch.await();
+        } finally {
+            closeChannel(cc);
+            closeChannel(sc);
+        }
+    }
+
+    @Test
+    @Timeout(value = 5000, unit = TimeUnit.MILLISECONDS)
+    public void testMaxMessagesPerReadRespectedWithAutoReadSharedGroup() throws Exception {
+        testMaxMessagesPerReadRespected(sharedGroup, sharedGroup, true);
+    }
+
+    @Test
+    @Timeout(value = 5000, unit = TimeUnit.MILLISECONDS)
+    public void testMaxMessagesPerReadRespectedWithoutAutoReadSharedGroup() throws Exception {
+        testMaxMessagesPerReadRespected(sharedGroup, sharedGroup, false);
+    }
+
+    @Test
+    @Timeout(value = 5000, unit = TimeUnit.MILLISECONDS)
+    public void testMaxMessagesPerReadRespectedWithAutoReadDifferentGroup() throws Exception {
+        testMaxMessagesPerReadRespected(group1, group2, true);
+    }
+
+    @Test
+    @Timeout(value = 5000, unit = TimeUnit.MILLISECONDS)
+    public void testMaxMessagesPerReadRespectedWithoutAutoReadDifferentGroup() throws Exception {
+        testMaxMessagesPerReadRespected(group1, group2, false);
+    }
+
+    private static void testMaxMessagesPerReadRespected(
+            EventLoopGroup serverGroup, EventLoopGroup clientGroup, final boolean autoRead) throws Exception {
+        final CountDownLatch countDownLatch = new CountDownLatch(5);
+        Bootstrap cb = new Bootstrap();
+        ServerBootstrap sb = new ServerBootstrap();
+
+        cb.group(serverGroup)
+                .channel(LocalChannel.class)
+                .option(ChannelOption.AUTO_READ, autoRead)
+                .option(ChannelOption.MAX_MESSAGES_PER_READ, 1)
+                .handler(new ChannelReadHandler(countDownLatch, autoRead));
+        sb.group(clientGroup)
+                .channel(LocalServerChannel.class)
+                .childHandler(new ChannelInboundHandlerAdapter() {
+                    @Override
+                    public void channelActive(final ChannelHandlerContext ctx) {
+                        for (int i = 0; i < 10; i++) {
+                            ctx.write(i);
+                        }
+                        ctx.flush();
+                    }
+                });
+
+        Channel sc = null;
+        Channel cc = null;
+        try {
+            // Start server
+            sc = sb.bind(TEST_ADDRESS).sync().channel();
+            cc = cb.connect(TEST_ADDRESS).sync().channel();
+
+            countDownLatch.await();
+        } finally {
+            closeChannel(cc);
+            closeChannel(sc);
+        }
+    }
+
+    @Test
+    @Timeout(value = 5000, unit = TimeUnit.MILLISECONDS)
+    public void testServerMaxMessagesPerReadRespectedWithAutoReadSharedGroup() throws Exception {
+        testServerMaxMessagesPerReadRespected(sharedGroup, sharedGroup, true);
+    }
+
+    @Test
+    @Timeout(value = 5000, unit = TimeUnit.MILLISECONDS)
+    public void testServerMaxMessagesPerReadRespectedWithoutAutoReadSharedGroup() throws Exception {
+        testServerMaxMessagesPerReadRespected(sharedGroup, sharedGroup, false);
+    }
+
+    @Test
+    @Timeout(value = 5000, unit = TimeUnit.MILLISECONDS)
+    public void testServerMaxMessagesPerReadRespectedWithAutoReadDifferentGroup() throws Exception {
+        testServerMaxMessagesPerReadRespected(group1, group2, true);
+    }
+
+    @Test
+    @Timeout(value = 5000, unit = TimeUnit.MILLISECONDS)
+    public void testServerMaxMessagesPerReadRespectedWithoutAutoReadDifferentGroup() throws Exception {
+        testServerMaxMessagesPerReadRespected(group1, group2, false);
+    }
+
+    private void testServerMaxMessagesPerReadRespected(
+            EventLoopGroup serverGroup, EventLoopGroup clientGroup, final boolean autoRead) throws Exception {
+        final CountDownLatch countDownLatch = new CountDownLatch(5);
+        Bootstrap cb = new Bootstrap();
+        ServerBootstrap sb = new ServerBootstrap();
+
+        cb.group(serverGroup)
+                .channel(LocalChannel.class)
+                .handler(new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel ch) {
+                        // NOOP
+                    }
+                });
+
+        sb.group(clientGroup)
+                .channel(LocalServerChannel.class)
+                .option(ChannelOption.AUTO_READ, autoRead)
+                .option(ChannelOption.MAX_MESSAGES_PER_READ, 1)
+                .handler(new ChannelReadHandler(countDownLatch, autoRead))
+                .childHandler(new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel ch) {
+                        // NOOP
+                    }
+                });
+
+        Channel sc = null;
+        Channel cc = null;
+        try {
+            // Start server
+            sc = sb.bind(TEST_ADDRESS).sync().channel();
+            for (int i = 0; i < 5; i++) {
+                try {
+                    cc = cb.connect(TEST_ADDRESS).sync().channel();
+                } finally {
+                    closeChannel(cc);
+                }
+            }
+
+            countDownLatch.await();
+        } finally {
+            closeChannel(sc);
+        }
+    }
+
+    @Test
+    @Timeout(value = 5000, unit = TimeUnit.MILLISECONDS)
+    public void testServerMaxMessagesPerReadRespectedWithQueuedConnections() throws Exception {
+        final int maxMessagesPerRead = 2;
+        final int connections = 5;
+        final CountDownLatch queuedConnections = new CountDownLatch(connections);
+        final BlockingQueue<Integer> messagesPerReadComplete = new LinkedBlockingQueue<Integer>();
+        final List<ChannelFuture> connectFutures = new ArrayList<ChannelFuture>();
+
+        Bootstrap cb = new Bootstrap();
+        ServerBootstrap sb = new ServerBootstrap();
+
+        cb.group(sharedGroup)
+                .channel(LocalChannel.class)
+                .handler(new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel ch) {
+                        // NOOP
+                    }
+                });
+
+        sb.group(sharedGroup)
+                .channelFactory(new ChannelFactory<ServerChannel>() {
+                    @Override
+                    public ServerChannel newChannel() {
+                        return new LocalServerChannel() {
+                            @Override
+                            protected LocalChannel newLocalChannel(LocalChannel peer) {
+                                LocalChannel child = super.newLocalChannel(peer);
+                                queuedConnections.countDown();
+                                return child;
+                            }
+                        };
+                    }
+                })
+                .option(ChannelOption.AUTO_READ, false)
+                .option(ChannelOption.MAX_MESSAGES_PER_READ, maxMessagesPerRead)
+                .handler(new ChannelInboundHandlerAdapter() {
+                    private int messagesRead;
+
+                    @Override
+                    public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                        messagesRead++;
+                        ctx.fireChannelRead(msg);
+                    }
+
+                    @Override
+                    public void channelReadComplete(ChannelHandlerContext ctx) {
+                        messagesPerReadComplete.add(messagesRead);
+                        messagesRead = 0;
+                        ctx.fireChannelReadComplete();
+                    }
+                })
+                .childHandler(new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel ch) {
+                        // NOOP
+                    }
+                });
+
+        Channel sc = null;
+        try {
+            sc = sb.bind(TEST_ADDRESS).sync().channel();
+            for (int i = 0; i < connections; i++) {
+                connectFutures.add(cb.connect(TEST_ADDRESS));
+            }
+
+            assertTrue(queuedConnections.await(5, SECONDS));
+
+            sc.config().setAutoRead(true);
+            assertEquals(maxMessagesPerRead, messagesPerReadComplete.take());
+            assertEquals(maxMessagesPerRead, messagesPerReadComplete.take());
+            assertEquals(connections - 2 * maxMessagesPerRead, messagesPerReadComplete.take());
+            for (ChannelFuture connectFuture : connectFutures) {
+                connectFuture.sync();
+            }
+        } finally {
+            for (ChannelFuture connectFuture : connectFutures) {
+                closeChannel(connectFuture.channel());
+            }
+            closeChannel(sc);
+        }
+    }
+
+    @Test
+    public void testConnectFailsWhenServerClosedWithQueuedConnection() throws Exception {
+        BlockingQueue<LocalChannel> accepted = new LinkedBlockingQueue<LocalChannel>();
+        Channel sc = bindServerWithAutoReadDisabled(accepted);
+        ChannelFuture cf = null;
+        try {
+            cf = connectClient();
+            assertNotNull(accepted.poll(5, SECONDS));
+
+            // The connection is queued but was not accepted yet.
+            sc.close().sync();
+
+            assertTrue(cf.await(5, SECONDS));
+            assertInstanceOf(ConnectException.class, cf.cause());
+            // The connect promise is failed before the channel is closed (as for any refused connection), and
+            // await() may return before the close, so wait for it.
+            assertTrue(cf.channel().closeFuture().await(5, SECONDS));
+            assertFalse(cf.channel().isOpen());
+            assertTrue(cf.channel().close().await().isSuccess());
+        } finally {
+            closeQuietly(cf);
+            closeChannel(sc);
+        }
+    }
+
+    @Test
+    public void testClientCloseAfterServerClosedWithQueuedConnection() throws Exception {
+        BlockingQueue<LocalChannel> accepted = new LinkedBlockingQueue<LocalChannel>();
+        final Channel sc = bindServerWithAutoReadDisabled(accepted);
+        ChannelFuture cf = null;
+        try {
+            cf = connectClient();
+            assertNotNull(accepted.poll(5, SECONDS));
+
+            // Close the server and then the client in one event loop task, so the client is closed before it
+            // learns that the queued connection was closed: closing the server only schedules that notification on
+            // the client's event loop. Calling both from this thread would let the event loop run the server's
+            // close, and so the notification, before the client's close is submitted.
+            final Channel client = cf.channel();
+            ChannelFuture closeFuture = sc.eventLoop().submit(new Callable<ChannelFuture>() {
+                @Override
+                public ChannelFuture call() throws Exception {
+                    sc.close();
+                    return client.close();
+                }
+            }).get(5, SECONDS);
+
+            assertTrue(closeFuture.await(5, SECONDS));
+            assertTrue(closeFuture.isSuccess());
+            assertTrue(cf.isDone());
+            assertInstanceOf(ClosedChannelException.class, cf.cause());
+        } finally {
+            closeQuietly(cf);
+            closeChannel(sc);
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    public void testPeerWriteAndCloseWhileWriteInProgressDeliversData() throws Exception {
+        final CountDownLatch writeListenerEntered = new CountDownLatch(1);
+        final CountDownLatch releaseWriteListener = new CountDownLatch(1);
+        final CountDownLatch dataReceived = new CountDownLatch(1);
+        final CountDownLatch clientInactive = new CountDownLatch(1);
+        final AtomicReference<Boolean> receivedBeforeInactive = new AtomicReference<Boolean>();
+        final BlockingQueue<LocalChannel> accepted = new LinkedBlockingQueue<LocalChannel>();
+
+        ServerBootstrap sb = new ServerBootstrap()
+                .group(group1, group2)
+                .channel(LocalServerChannel.class)
+                .childHandler(new ChannelInitializer<LocalChannel>() {
+                    @Override
+                    protected void initChannel(LocalChannel ch) {
+                        accepted.add(ch);
+                    }
+                });
+        Bootstrap cb = new Bootstrap()
+                .group(group1)
+                .channel(LocalChannel.class)
+                .handler(new ChannelInitializer<LocalChannel>() {
+                    @Override
+                    protected void initChannel(LocalChannel ch) {
+                        ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                                ReferenceCountUtil.release(msg);
+                                dataReceived.countDown();
+                            }
+
+                            @Override
+                            public void channelInactive(ChannelHandlerContext ctx) {
+                                receivedBeforeInactive.set(dataReceived.getCount() == 0);
+                                clientInactive.countDown();
+                            }
+                        });
+                    }
+                });
+
+        Channel sc = null;
+        Channel cc = null;
+        try {
+            sc = sb.bind(TEST_ADDRESS).sync().channel();
+            cc = cb.connect(TEST_ADDRESS).sync().channel();
+            final LocalChannel child = accepted.poll(5, SECONDS);
+            assertNotNull(child);
+            while (!child.isActive()) {
+                Thread.sleep(10);
+            }
+
+            // Block the client inside doWrite(...) (the promise listener is run while writeInProgress is true) so
+            // that the peer sees the client as writing.
+            cc.writeAndFlush(Unpooled.wrappedBuffer(new byte[] { 'X' })).addListener(new ChannelFutureListener() {
+                @Override
+                public void operationComplete(ChannelFuture future) throws Exception {
+                    writeListenerEntered.countDown();
+                    try {
+                        releaseWriteListener.await();
+                    } catch (InterruptedException ignore) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            });
+            assertTrue(writeListenerEntered.await(5, SECONDS));
+
+            // Write and close from the peer while the client is still writing, then unblock the client.
+            child.eventLoop().submit(new Runnable() {
+                @Override
+                public void run() {
+                    child.writeAndFlush(Unpooled.wrappedBuffer(new byte[] { 'P' }));
+                    child.close();
+                }
+            }).sync();
+            releaseWriteListener.countDown();
+
+            assertTrue(clientInactive.await(5, SECONDS));
+            assertEquals(Boolean.TRUE, receivedBeforeInactive.get(),
+                    "Data written by the peer before it closed must not be dropped");
+        } finally {
+            releaseWriteListener.countDown();
+            closeChannel(cc);
+            closeChannel(sc);
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    public void testPeerWritesMoreThanOneReadAndClosesDeliversAllData() throws Exception {
+        testPeerWritesMoreThanOneReadAndClosesDeliversAllData(group1, group2);
+    }
+
+    @Test
+    @Timeout(30)
+    public void testPeerWritesMoreThanOneReadAndClosesDeliversAllDataSameEventLoop() throws Exception {
+        testPeerWritesMoreThanOneReadAndClosesDeliversAllData(group1, group1);
+    }
+
+    private static void testPeerWritesMoreThanOneReadAndClosesDeliversAllData(
+            EventLoopGroup serverGroup, EventLoopGroup clientGroup) throws Exception {
+        final int messages = 100;
+        final BlockingQueue<Integer> receivedBeforeInactive = new LinkedBlockingQueue<Integer>();
+        final List<Object> received = new ArrayList<Object>();
+
+        ServerBootstrap sb = new ServerBootstrap()
+                .group(serverGroup)
+                .channel(LocalServerChannel.class)
+                .childHandler(new ChannelInboundHandlerAdapter() {
+                    @Override
+                    public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                        received.add(msg);
+                    }
+
+                    @Override
+                    public void channelInactive(ChannelHandlerContext ctx) {
+                        receivedBeforeInactive.add(received.size());
+                    }
+                });
+        Bootstrap cb = new Bootstrap()
+                .group(clientGroup)
+                .channel(LocalChannel.class)
+                .handler(new ChannelInboundHandlerAdapter());
+
+        Channel sc = null;
+        final Channel cc;
+        try {
+            sc = sb.bind(TEST_ADDRESS).sync().channel();
+            cc = cb.connect(TEST_ADDRESS).sync().channel();
+            // Write more messages than the peer reads in one go and close right away.
+            cc.eventLoop().submit(new Runnable() {
+                @Override
+                public void run() {
+                    for (int i = 0; i < messages; i++) {
+                        cc.write(i);
+                    }
+                    cc.flush();
+                    cc.close();
+                }
+            }).sync();
+
+            Integer count = receivedBeforeInactive.poll(10, SECONDS);
+            assertNotNull(count);
+            assertEquals(messages, count.intValue(),
+                    "Data written by the peer before it closed must not be dropped");
+            for (int i = 0; i < messages; i++) {
+                assertEquals(i, received.get(i));
+            }
+        } finally {
+            closeChannel(sc);
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    public void testPeerWritesAndClosesDeliversAllBufferedDataWithAutoReadOff() throws Exception {
+        final int messages = 100;
+        final BlockingQueue<Integer> receivedBeforeInactive = new LinkedBlockingQueue<Integer>();
+        final List<Integer> received = new ArrayList<Integer>();
+
+        // The accepted channel never calls read(). Like the epoll and kqueue transports when they see the peer's
+        // FIN, it gets the data that is still buffered before it becomes inactive.
+        ServerBootstrap sb = new ServerBootstrap()
+                .group(group1, group2)
+                .channel(LocalServerChannel.class)
+                .childOption(ChannelOption.AUTO_READ, false)
+                .childHandler(new ChannelInboundHandlerAdapter() {
+                    @Override
+                    public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                        ByteBuf buf = (ByteBuf) msg;
+                        try {
+                            while (buf.isReadable()) {
+                                received.add((int) buf.readByte());
+                            }
+                        } finally {
+                            buf.release();
+                        }
+                    }
+
+                    @Override
+                    public void channelInactive(ChannelHandlerContext ctx) {
+                        receivedBeforeInactive.add(received.size());
+                    }
+                });
+        Bootstrap cb = new Bootstrap()
+                .group(group1)
+                .channel(LocalChannel.class)
+                .handler(new ChannelInboundHandlerAdapter());
+
+        Channel sc = null;
+        final Channel cc;
+        try {
+            sc = sb.bind(TEST_ADDRESS).sync().channel();
+            cc = cb.connect(TEST_ADDRESS).sync().channel();
+            cc.eventLoop().submit(new Runnable() {
+                @Override
+                public void run() {
+                    for (int i = 0; i < messages; i++) {
+                        cc.write(Unpooled.directBuffer(1).writeByte(i));
+                    }
+                    cc.flush();
+                    cc.close();
+                }
+            }).sync();
+
+            Integer count = receivedBeforeInactive.poll(10, SECONDS);
+            assertNotNull(count);
+            assertEquals(messages, count.intValue(),
+                    "Data written by the peer before it closed must not be dropped");
+            for (int i = 0; i < messages; i++) {
+                assertEquals(i, received.get(i));
+            }
+        } finally {
+            closeChannel(sc);
+        }
+    }
+
+    @Test
+    public void testClientCloseWhileConnectionIsQueued() throws Exception {
+        BlockingQueue<LocalChannel> accepted = new LinkedBlockingQueue<LocalChannel>();
+        Channel sc = bindServerWithAutoReadDisabled(accepted);
+        ChannelFuture cf = null;
+        try {
+            cf = connectClient();
+            LocalChannel child = accepted.poll(5, SECONDS);
+            assertNotNull(child);
+
+            assertTrue(cf.channel().close().await().isSuccess());
+            assertInstanceOf(ClosedChannelException.class, cf.cause());
+
+            // Accepting the queued connection now must not reopen or activate the client, and the accepted
+            // channel must be closed.
+            sc.config().setAutoRead(true);
+            assertTrue(child.closeFuture().await(5, SECONDS));
+            assertFalse(child.isActive());
+            assertFalse(cf.channel().isOpen());
+            assertFalse(cf.channel().isActive());
+        } finally {
+            closeQuietly(cf);
+            closeChannel(sc);
+        }
+    }
+
+    @Test
+    public void testConnectFailsWhenServerClosesBeforeConnectionArrives() throws Exception {
+        final CountDownLatch arrived = new CountDownLatch(1);
+        Channel sc = new ServerBootstrap()
+                .group(group2)
+                .channelFactory(new ChannelFactory<ServerChannel>() {
+                    @Override
+                    public ServerChannel newChannel() {
+                        return new LocalServerChannel() {
+                            @Override
+                            protected LocalChannel newLocalChannel(LocalChannel peer) {
+                                arrived.countDown();
+                                return super.newLocalChannel(peer);
+                            }
+                        };
+                    }
+                })
+                .childHandler(new TestHandler())
+                .bind(TEST_ADDRESS).sync().channel();
+        final CountDownLatch release = new CountDownLatch(1);
+        ChannelFuture cf = null;
+        try {
+            // Block the server's event loop, so the close below is queued and the server stays in the registry.
+            sc.eventLoop().execute(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        release.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            });
+            ChannelFuture closeFuture = sc.close();
+            cf = new Bootstrap()
+                    .group(group1)
+                    .channel(LocalChannel.class)
+                    .handler(new TestHandler())
+                    .connect(TEST_ADDRESS);
+            // Wait until the client found the server and handed the connection to the server's event loop, behind
+            // the close.
+            assertTrue(arrived.await(5, SECONDS));
+            cf.channel().eventLoop().submit(new Runnable() {
+                @Override
+                public void run() {
+                    // NOOP
+                }
+            }).sync();
+            release.countDown();
+            closeFuture.sync();
+
+            assertTrue(cf.await(5, SECONDS));
+            assertInstanceOf(ConnectException.class, cf.cause());
+            assertTrue(cf.channel().close().await().isSuccess());
+        } finally {
+            release.countDown();
+            closeQuietly(cf);
+            closeChannel(sc);
+        }
+    }
+
+    @Test
+    public void testConnectFailsWhenAcceptedChannelCannotBeRegistered() throws Exception {
+        // The child group is terminated, so registering the accepted channel fails. This logs a WARN
+        // ("Force-closing a channel whose registration task was not accepted by an event loop") and an ERROR
+        // (a listener notification that cannot be submitted to the terminated event loop). Both are expected.
+        EventLoopGroup childGroup = new LocalEventLoopGroup(1);
+        childGroup.shutdownGracefully(0, 0, SECONDS).sync();
+        Channel sc = new ServerBootstrap()
+                .group(sharedGroup, childGroup)
+                .channel(LocalServerChannel.class)
+                .childHandler(new TestHandler())
+                .bind(TEST_ADDRESS).sync().channel();
+        ChannelFuture cf = null;
+        try {
+            cf = connectClient();
+
+            assertTrue(cf.await(5, SECONDS));
+            assertInstanceOf(ConnectException.class, cf.cause());
+            assertTrue(cf.channel().closeFuture().await(5, SECONDS));
+            assertFalse(cf.channel().isOpen());
+            assertTrue(cf.channel().close().await().isSuccess());
+        } finally {
+            closeQuietly(cf);
+            closeChannel(sc);
+        }
+    }
+
+    // Client and server share the single event loop of sharedGroup, so the connection is queued by the time
+    // newLocalChannel(...) returns.
+    private static Channel bindServerWithAutoReadDisabled(final BlockingQueue<LocalChannel> accepted)
+            throws InterruptedException {
+        return new ServerBootstrap()
+                .group(sharedGroup)
+                .channelFactory(new ChannelFactory<ServerChannel>() {
+                    @Override
+                    public ServerChannel newChannel() {
+                        return new LocalServerChannel() {
+                            @Override
+                            protected LocalChannel newLocalChannel(LocalChannel peer) {
+                                LocalChannel child = super.newLocalChannel(peer);
+                                accepted.add(child);
+                                return child;
+                            }
+                        };
+                    }
+                })
+                .option(ChannelOption.AUTO_READ, false)
+                .childHandler(new TestHandler())
+                .bind(TEST_ADDRESS).sync().channel();
+    }
+
+    private static ChannelFuture connectClient() {
+        return new Bootstrap()
+                .group(sharedGroup)
+                .channel(LocalChannel.class)
+                .handler(new TestHandler())
+                .connect(TEST_ADDRESS);
+    }
+
+    private static void closeQuietly(ChannelFuture cf) {
+        if (cf != null) {
+            cf.channel().close().awaitUninterruptibly();
+        }
+    }
+
+    private static final class ChannelReadHandler extends ChannelInboundHandlerAdapter {
+
+        private final CountDownLatch latch;
+        private final boolean autoRead;
+        private int read;
+
+        ChannelReadHandler(CountDownLatch latch, boolean autoRead) {
+            this.latch = latch;
+            this.autoRead = autoRead;
+        }
+
+        @Override
+        public void channelActive(ChannelHandlerContext ctx) {
+            if (!autoRead) {
+                ctx.read();
+            }
+            ctx.fireChannelActive();
+        }
+
+        @Override
+        public void channelRead(final ChannelHandlerContext ctx, Object msg) {
+            assertEquals(0, read);
+            read++;
+            ctx.fireChannelRead(msg);
+        }
+
+        @Override
+        public void channelReadComplete(final ChannelHandlerContext ctx) {
+            assertEquals(1, read);
+            latch.countDown();
+            if (latch.getCount() > 0) {
+                if (!autoRead) {
+                    // The read will be scheduled 100ms in the future to ensure we not receive any
+                    // channelRead calls in the meantime.
+                    ctx.executor().schedule(new Runnable() {
+                        @Override
+                        public void run() {
+                            read = 0;
+                            ctx.read();
+                        }
+                    }, 100, TimeUnit.MILLISECONDS);
+                } else {
+                    read = 0;
+                }
+            } else {
+                read = 0;
+            }
+            ctx.fireChannelReadComplete();
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            ctx.fireExceptionCaught(cause);
+            ctx.close();
+        }
+    }
+
+    @Test
+    public void testReadCompleteCalledOnHandle() throws Exception {
+        Bootstrap cb = new Bootstrap();
+        ServerBootstrap sb = new ServerBootstrap();
+
+        cb.group(sharedGroup)
+                .channel(LocalChannel.class)
+                .handler(new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel ch) {
+                        // NOOP
+                    }
+                });
+
+        CountDownLatch serverLatch = new CountDownLatch(1);
+        CountDownLatch childLatch = new CountDownLatch(1);
+
+        sb.group(sharedGroup)
+                .channel(LocalServerChannel.class)
+                .option(ChannelOption.RCVBUF_ALLOCATOR, new ReadCompleteRecvAllocator(serverLatch))
+                .childHandler(new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel ch) {
+                        // NOOP
+                    }
+                })
+                .childOption(ChannelOption.RCVBUF_ALLOCATOR, new ReadCompleteRecvAllocator(childLatch));
+
+        Channel sc = null;
+        Channel cc = null;
+        try {
+            // Start server
+            sc = sb.bind(TEST_ADDRESS).sync().channel();
+            try {
+                cc = cb.connect(TEST_ADDRESS).sync().channel();
+                cc.writeAndFlush("msg").sync();
+            } finally {
+                closeChannel(cc);
+            }
+
+            serverLatch.await();
+            childLatch.await();
+        } finally {
+            closeChannel(sc);
+        }
+    }
+
+    private static final class ReadCompleteRecvAllocator extends DefaultMaxMessagesRecvByteBufAllocator {
+        private final CountDownLatch latch;
+        ReadCompleteRecvAllocator(CountDownLatch latch) {
+            this.latch = latch;
+        }
+
+        @Override
+        public Handle newHandle() {
+            return new MaxMessageHandle() {
+                @Override
+                public int guess() {
+                    return 128;
+                }
+
+                @Override
+                public void readComplete() {
+                    super.readComplete();
+                    latch.countDown();
+                }
+            };
         }
     }
 }

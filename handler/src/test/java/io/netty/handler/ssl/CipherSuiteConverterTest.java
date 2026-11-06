@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -18,13 +18,15 @@ package io.netty.handler.ssl;
 
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Isolated;
 
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.sameInstance;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertThat;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@Isolated
 public class CipherSuiteConverterTest {
 
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(CipherSuiteConverterTest.class);
@@ -113,12 +115,26 @@ public class CipherSuiteConverterTest {
         testJ2OMapping("TLS_KRB5_EXPORT_WITH_RC2_CBC_40_MD5", "EXP-KRB5-RC2-CBC-MD5");
         testJ2OMapping("TLS_KRB5_EXPORT_WITH_RC2_CBC_40_SHA", "EXP-KRB5-RC2-CBC-SHA");
         testJ2OMapping("TLS_RSA_WITH_AES_256_CBC_SHA", "AES256-SHA");
+
+        // For historical reasons the CHACHA20 ciphers do not follow OpenSSL's custom naming
+        // convention and omits the HMAC algorithm portion of the name.
+        testJ2OMapping("TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256", "ECDHE-RSA-CHACHA20-POLY1305");
+        testJ2OMapping("TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256", "ECDHE-ECDSA-CHACHA20-POLY1305");
+        testJ2OMapping("TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256", "DHE-RSA-CHACHA20-POLY1305");
+        testJ2OMapping("TLS_PSK_WITH_CHACHA20_POLY1305_SHA256", "PSK-CHACHA20-POLY1305");
+        testJ2OMapping("TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256", "ECDHE-PSK-CHACHA20-POLY1305");
+        testJ2OMapping("TLS_DHE_PSK_WITH_CHACHA20_POLY1305_SHA256", "DHE-PSK-CHACHA20-POLY1305");
+        testJ2OMapping("TLS_RSA_PSK_WITH_CHACHA20_POLY1305_SHA256", "RSA-PSK-CHACHA20-POLY1305");
+
+        testJ2OMapping("TLS_AES_128_GCM_SHA256", "TLS_AES_128_GCM_SHA256");
+        testJ2OMapping("TLS_AES_256_GCM_SHA384", "TLS_AES_256_GCM_SHA384");
+        testJ2OMapping("TLS_CHACHA20_POLY1305_SHA256", "TLS_CHACHA20_POLY1305_SHA256");
     }
 
     private static void testJ2OMapping(String javaCipherSuite, String openSslCipherSuite) {
-        final String actual = CipherSuiteConverter.toOpenSslUncached(javaCipherSuite);
+        final String actual = CipherSuiteConverter.toOpenSslUncached(javaCipherSuite, false);
         logger.info("{} => {}", javaCipherSuite, actual);
-        assertThat(actual, is(openSslCipherSuite));
+        assertEquals(openSslCipherSuite, actual);
     }
 
     @Test
@@ -260,12 +276,22 @@ public class CipherSuiteConverterTest {
         testO2JMapping("RSA_WITH_DES_CBC_MD5", "DES-CBC-MD5");
         testO2JMapping("EDH_RSA_EXPORT_WITH_DES_CBC_40_SHA", "EXP-EDH-RSA-DES-CBC-SHA");
         testO2JMapping("EDH_DSS_EXPORT_WITH_DES_CBC_40_SHA", "EXP-EDH-DSS-DES-CBC-SHA");
+
+        // For historical reasons the CHACHA20 ciphers do not follow OpenSSL's custom naming
+        // convention and omits the HMAC algorithm portion of the name.
+        testO2JMapping("ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256", "ECDHE-RSA-CHACHA20-POLY1305");
+        testO2JMapping("ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256", "ECDHE-ECDSA-CHACHA20-POLY1305");
+        testO2JMapping("DHE_RSA_WITH_CHACHA20_POLY1305_SHA256", "DHE-RSA-CHACHA20-POLY1305");
+        testO2JMapping("PSK_WITH_CHACHA20_POLY1305_SHA256", "PSK-CHACHA20-POLY1305");
+        testO2JMapping("ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256", "ECDHE-PSK-CHACHA20-POLY1305");
+        testO2JMapping("DHE_PSK_WITH_CHACHA20_POLY1305_SHA256", "DHE-PSK-CHACHA20-POLY1305");
+        testO2JMapping("RSA_PSK_WITH_CHACHA20_POLY1305_SHA256", "RSA-PSK-CHACHA20-POLY1305");
     }
 
     private static void testO2JMapping(String javaCipherSuite, String openSslCipherSuite) {
         final String actual = CipherSuiteConverter.toJavaUncached(openSslCipherSuite);
         logger.info("{} => {}", openSslCipherSuite, actual);
-        assertThat(actual, is(javaCipherSuite));
+        assertEquals(javaCipherSuite, actual);
     }
 
     @Test
@@ -287,38 +313,41 @@ public class CipherSuiteConverterTest {
         testUnknownJavaCiphersToOpenSSL("");
     }
 
-    private void testUnknownOpenSSLCiphersToJava(String openSslCipherSuite) {
+    private static void testUnknownOpenSSLCiphersToJava(String openSslCipherSuite) {
         CipherSuiteConverter.clearCache();
 
         assertNull(CipherSuiteConverter.toJava(openSslCipherSuite, "TLS"));
         assertNull(CipherSuiteConverter.toJava(openSslCipherSuite, "SSL"));
     }
 
-    private void testUnknownJavaCiphersToOpenSSL(String javaCipherSuite) {
+    private static void testUnknownJavaCiphersToOpenSSL(String javaCipherSuite) {
         CipherSuiteConverter.clearCache();
 
-        assertNull(CipherSuiteConverter.toOpenSsl(javaCipherSuite));
-        assertNull(CipherSuiteConverter.toOpenSsl(javaCipherSuite));
+        assertNull(CipherSuiteConverter.toOpenSsl(javaCipherSuite, false));
+        assertNull(CipherSuiteConverter.toOpenSsl(javaCipherSuite, true));
     }
 
     private static void testCachedJ2OMapping(String javaCipherSuite, String openSslCipherSuite) {
         CipherSuiteConverter.clearCache();
 
-        final String actual1 = CipherSuiteConverter.toOpenSsl(javaCipherSuite);
-        assertThat(actual1, is(openSslCipherSuite));
+        // For TLSv1.3 this should make no diffierence if boringSSL is true or false
+        final String actual1 = CipherSuiteConverter.toOpenSsl(javaCipherSuite, false);
+        assertEquals(openSslCipherSuite, actual1);
+        final String actual2 = CipherSuiteConverter.toOpenSsl(javaCipherSuite, true);
+        assertEquals(actual1, actual2);
 
         // Ensure that the cache entries have been created.
-        assertThat(CipherSuiteConverter.isJ2OCached(javaCipherSuite, actual1), is(true));
-        assertThat(CipherSuiteConverter.isO2JCached(actual1, "", javaCipherSuite.substring(4)), is(true));
-        assertThat(CipherSuiteConverter.isO2JCached(actual1, "SSL", "SSL_" + javaCipherSuite.substring(4)), is(true));
-        assertThat(CipherSuiteConverter.isO2JCached(actual1, "TLS", "TLS_" + javaCipherSuite.substring(4)), is(true));
+        assertTrue(CipherSuiteConverter.isJ2OCached(javaCipherSuite, actual1));
+        assertTrue(CipherSuiteConverter.isO2JCached(actual1, "", javaCipherSuite.substring(4)));
+        assertTrue(CipherSuiteConverter.isO2JCached(actual1, "SSL", "SSL_" + javaCipherSuite.substring(4)));
+        assertTrue(CipherSuiteConverter.isO2JCached(actual1, "TLS", "TLS_" + javaCipherSuite.substring(4)));
 
-        final String actual2 = CipherSuiteConverter.toOpenSsl(javaCipherSuite);
-        assertThat(actual2, is(openSslCipherSuite));
+        final String actual3 = CipherSuiteConverter.toOpenSsl(javaCipherSuite, false);
+        assertEquals(openSslCipherSuite, actual3);
 
         // Test if the returned cipher strings are identical,
         // so that the TLS sessions with the same cipher suite do not create many strings.
-        assertThat(actual1, is(sameInstance(actual2)));
+        assertSame(actual1, actual3);
     }
 
     @Test
@@ -334,24 +363,54 @@ public class CipherSuiteConverterTest {
 
         final String tlsActual1 = CipherSuiteConverter.toJava(openSslCipherSuite, "TLS");
         final String sslActual1 = CipherSuiteConverter.toJava(openSslCipherSuite, "SSL");
-        assertThat(tlsActual1, is(tlsExpected));
-        assertThat(sslActual1, is(sslExpected));
+        assertEquals(tlsExpected, tlsActual1);
+        assertEquals(sslExpected, sslActual1);
 
         // Ensure that the cache entries have been created.
-        assertThat(CipherSuiteConverter.isO2JCached(openSslCipherSuite, "", javaCipherSuite), is(true));
-        assertThat(CipherSuiteConverter.isO2JCached(openSslCipherSuite, "SSL", sslExpected), is(true));
-        assertThat(CipherSuiteConverter.isO2JCached(openSslCipherSuite, "TLS", tlsExpected), is(true));
-        assertThat(CipherSuiteConverter.isJ2OCached(tlsExpected, openSslCipherSuite), is(true));
-        assertThat(CipherSuiteConverter.isJ2OCached(sslExpected, openSslCipherSuite), is(true));
+        assertTrue(CipherSuiteConverter.isO2JCached(openSslCipherSuite, "", javaCipherSuite));
+        assertTrue(CipherSuiteConverter.isO2JCached(openSslCipherSuite, "SSL", sslExpected));
+        assertTrue(CipherSuiteConverter.isO2JCached(openSslCipherSuite, "TLS", tlsExpected));
+        assertTrue(CipherSuiteConverter.isJ2OCached(tlsExpected, openSslCipherSuite));
+        assertTrue(CipherSuiteConverter.isJ2OCached(sslExpected, openSslCipherSuite));
 
         final String tlsActual2 = CipherSuiteConverter.toJava(openSslCipherSuite, "TLS");
         final String sslActual2 = CipherSuiteConverter.toJava(openSslCipherSuite, "SSL");
-        assertThat(tlsActual2, is(tlsExpected));
-        assertThat(sslActual2, is(sslExpected));
+        assertEquals(tlsExpected, tlsActual2);
+        assertEquals(sslExpected, sslActual2);
 
         // Test if the returned cipher strings are identical,
         // so that the TLS sessions with the same cipher suite do not create many strings.
-        assertThat(tlsActual1, is(sameInstance(tlsActual2)));
-        assertThat(sslActual1, is(sameInstance(sslActual2)));
+        assertSame(tlsActual1, tlsActual2);
+        assertSame(sslActual1, sslActual2);
+    }
+
+    @Test
+    public void testTlsv13Mappings() {
+        CipherSuiteConverter.clearCache();
+
+        assertEquals("TLS_AES_128_GCM_SHA256",
+                     CipherSuiteConverter.toJava("TLS_AES_128_GCM_SHA256", "TLS"));
+        assertNull(CipherSuiteConverter.toJava("TLS_AES_128_GCM_SHA256", "SSL"));
+        assertEquals("TLS_AES_256_GCM_SHA384",
+                     CipherSuiteConverter.toJava("TLS_AES_256_GCM_SHA384", "TLS"));
+        assertNull(CipherSuiteConverter.toJava("TLS_AES_256_GCM_SHA384", "SSL"));
+        assertEquals("TLS_CHACHA20_POLY1305_SHA256",
+                     CipherSuiteConverter.toJava("TLS_CHACHA20_POLY1305_SHA256", "TLS"));
+        assertNull(CipherSuiteConverter.toJava("TLS_CHACHA20_POLY1305_SHA256", "SSL"));
+
+        // BoringSSL use different cipher naming then OpenSSL so we need to test for both
+        assertEquals("TLS_AES_128_GCM_SHA256",
+                     CipherSuiteConverter.toOpenSsl("TLS_AES_128_GCM_SHA256", false));
+        assertEquals("TLS_AES_256_GCM_SHA384",
+                     CipherSuiteConverter.toOpenSsl("TLS_AES_256_GCM_SHA384", false));
+        assertEquals("TLS_CHACHA20_POLY1305_SHA256",
+                     CipherSuiteConverter.toOpenSsl("TLS_CHACHA20_POLY1305_SHA256", false));
+
+        assertEquals("AEAD-AES128-GCM-SHA256",
+                     CipherSuiteConverter.toOpenSsl("TLS_AES_128_GCM_SHA256", true));
+        assertEquals("AEAD-AES256-GCM-SHA384",
+                     CipherSuiteConverter.toOpenSsl("TLS_AES_256_GCM_SHA384", true));
+        assertEquals("AEAD-CHACHA20-POLY1305-SHA256",
+                     CipherSuiteConverter.toOpenSsl("TLS_CHACHA20_POLY1305_SHA256", true));
     }
 }

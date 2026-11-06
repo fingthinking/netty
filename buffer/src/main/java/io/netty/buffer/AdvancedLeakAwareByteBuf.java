@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -17,6 +17,7 @@
 package io.netty.buffer;
 
 import io.netty.util.ByteProcessor;
+import io.netty.util.ResourceLeakDetector;
 import io.netty.util.ResourceLeakTracker;
 import io.netty.util.internal.SystemPropertyUtil;
 import io.netty.util.internal.logging.InternalLogger;
@@ -34,6 +35,7 @@ import java.nio.charset.Charset;
 
 final class AdvancedLeakAwareByteBuf extends SimpleLeakAwareByteBuf {
 
+    // If set to true we will only record stacktraces for touch(...), release(...) and retain(...) calls.
     private static final String PROP_ACQUIRE_AND_RELEASE_ONLY = "io.netty.leakDetection.acquireAndReleaseOnly";
     private static final boolean ACQUIRE_AND_RELEASE_ONLY;
 
@@ -45,6 +47,9 @@ final class AdvancedLeakAwareByteBuf extends SimpleLeakAwareByteBuf {
         if (logger.isDebugEnabled()) {
             logger.debug("-D{}: {}", PROP_ACQUIRE_AND_RELEASE_ONLY, ACQUIRE_AND_RELEASE_ONLY);
         }
+
+        ResourceLeakDetector.addExclusions(
+                AdvancedLeakAwareByteBuf.class, "touch", "recordLeakNonRefCountingOperation");
     }
 
     AdvancedLeakAwareByteBuf(ByteBuf buf, ResourceLeakTracker<ByteBuf> leak) {
@@ -929,6 +934,18 @@ final class AdvancedLeakAwareByteBuf extends SimpleLeakAwareByteBuf {
     public ByteBuf retain(int increment) {
         leak.record();
         return super.retain(increment);
+    }
+
+    @Override
+    public boolean release() {
+        leak.record();
+        return super.release();
+    }
+
+    @Override
+    public boolean release(int decrement) {
+        leak.record();
+        return super.release(decrement);
     }
 
     @Override

@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,6 +15,7 @@
  */
 package io.netty.util;
 
+import io.netty.util.internal.ObjectUtil;
 import io.netty.util.internal.StringUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -25,6 +26,10 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 public final class ReferenceCountUtil {
 
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(ReferenceCountUtil.class);
+
+    static {
+        ResourceLeakDetector.addExclusions(ReferenceCountUtil.class, "touch");
+    }
 
     /**
      * Try to call {@link ReferenceCounted#retain()} if the specified message implements {@link ReferenceCounted}.
@@ -44,6 +49,7 @@ public final class ReferenceCountUtil {
      */
     @SuppressWarnings("unchecked")
     public static <T> T retain(T msg, int increment) {
+        ObjectUtil.checkPositive(increment, "increment");
         if (msg instanceof ReferenceCounted) {
             return (T) ((ReferenceCounted) msg).retain(increment);
         }
@@ -91,6 +97,7 @@ public final class ReferenceCountUtil {
      * If the specified message doesn't implement {@link ReferenceCounted}, this method does nothing.
      */
     public static boolean release(Object msg, int decrement) {
+        ObjectUtil.checkPositive(decrement, "decrement");
         if (msg instanceof ReferenceCounted) {
             return ((ReferenceCounted) msg).release(decrement);
         }
@@ -121,6 +128,7 @@ public final class ReferenceCountUtil {
      */
     public static void safeRelease(Object msg, int decrement) {
         try {
+            ObjectUtil.checkPositive(decrement, "decrement");
             release(msg, decrement);
         } catch (Throwable t) {
             if (logger.isWarnEnabled()) {
@@ -150,6 +158,7 @@ public final class ReferenceCountUtil {
      */
     @Deprecated
     public static <T> T releaseLater(T msg, int decrement) {
+        ObjectUtil.checkPositive(decrement, "decrement");
         if (msg instanceof ReferenceCounted) {
             ThreadDeathWatcher.watch(Thread.currentThread(), new ReleasingTask((ReferenceCounted) msg, decrement));
         }

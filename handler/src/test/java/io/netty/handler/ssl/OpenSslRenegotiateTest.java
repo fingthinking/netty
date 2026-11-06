@@ -1,11 +1,11 @@
 /*
- * Copyright 2015 The Netty Project
+ * Copyright 2017 The Netty Project
  *
  * The Netty Project licenses this file to you under the Apache License,
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,22 +15,29 @@
  */
 package io.netty.handler.ssl;
 
-import org.junit.BeforeClass;
+import org.junit.jupiter.api.BeforeAll;
 
-import static org.junit.Assume.assumeFalse;
-import static org.junit.Assume.assumeTrue;
+import java.util.concurrent.atomic.AtomicReference;
+
+import javax.net.ssl.SSLException;
+
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 public class OpenSslRenegotiateTest extends RenegotiateTest {
 
-    @BeforeClass
+    @BeforeAll
     public static void checkOpenSsl() {
-        assumeTrue(OpenSsl.isAvailable());
-        // BoringSSL does not support renegotiation intentionally.
-        assumeFalse("BoringSSL".equals(OpenSsl.versionString()));
+        OpenSsl.ensureAvailability();
     }
 
     @Override
     protected SslProvider serverSslProvider() {
         return SslProvider.OPENSSL;
+    }
+
+    protected void verifyResult(AtomicReference<Throwable> error) throws Throwable {
+        Throwable cause = error.get();
+        // Renegotiation is not supported by the OpenSslEngine.
+        assertInstanceOf(SSLException.class, cause);
     }
 }

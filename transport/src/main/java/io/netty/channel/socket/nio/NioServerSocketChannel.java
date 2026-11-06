@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -17,16 +17,20 @@ package io.netty.channel.socket.nio;
 
 import io.netty.channel.ChannelException;
 import io.netty.channel.ChannelMetadata;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelOutboundBuffer;
+import io.netty.channel.socket.InternetProtocolFamily;
 import io.netty.util.internal.SocketUtils;
 import io.netty.channel.nio.AbstractNioMessageChannel;
 import io.netty.channel.socket.DefaultServerSocketChannelConfig;
 import io.netty.channel.socket.ServerSocketChannelConfig;
 import io.netty.util.internal.PlatformDependent;
+import io.netty.util.internal.SuppressJava6Requirement;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.SocketAddress;
@@ -35,6 +39,7 @@ import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.channels.spi.SelectorProvider;
 import java.util.List;
+import java.util.Map;
 
 /**
  * A {@link io.netty.channel.socket.ServerSocketChannel} implementation which uses
@@ -48,18 +53,16 @@ public class NioServerSocketChannel extends AbstractNioMessageChannel
 
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(NioServerSocketChannel.class);
 
-    private static ServerSocketChannel newSocket(SelectorProvider provider) {
+    private static final Method OPEN_SERVER_SOCKET_CHANNEL_WITH_FAMILY =
+            SelectorProviderUtil.findOpenMethod("openServerSocketChannel");
+
+    private static ServerSocketChannel newChannel(SelectorProvider provider, InternetProtocolFamily family) {
         try {
-            /**
-             *  Use the {@link SelectorProvider} to open {@link SocketChannel} and so remove condition in
-             *  {@link SelectorProvider#provider()} which is called by each ServerSocketChannel.open() otherwise.
-             *
-             *  See <a href="https://github.com/netty/netty/issues/2308">#2308</a>.
-             */
-            return provider.openServerSocketChannel();
+            ServerSocketChannel channel =
+                    SelectorProviderUtil.newChannel(OPEN_SERVER_SOCKET_CHANNEL_WITH_FAMILY, provider, family);
+            return channel == null ? provider.openServerSocketChannel() : channel;
         } catch (IOException e) {
-            throw new ChannelException(
-                    "Failed to open a server socket.", e);
+            throw new ChannelException("Failed to open a socket.", e);
         }
     }
 
@@ -69,14 +72,21 @@ public class NioServerSocketChannel extends AbstractNioMessageChannel
      * Create a new instance
      */
     public NioServerSocketChannel() {
-        this(newSocket(DEFAULT_SELECTOR_PROVIDER));
+        this(DEFAULT_SELECTOR_PROVIDER);
     }
 
     /**
      * Create a new instance using the given {@link SelectorProvider}.
      */
     public NioServerSocketChannel(SelectorProvider provider) {
-        this(newSocket(provider));
+        this(provider, null);
+    }
+
+    /**
+     * Create a new instance using the given {@link SelectorProvider} and protocol family (supported only since JDK 15).
+     */
+    public NioServerSocketChannel(SelectorProvider provider, InternetProtocolFamily family) {
+        this(newChannel(provider, family));
     }
 
     /**
@@ -104,7 +114,9 @@ public class NioServerSocketChannel extends AbstractNioMessageChannel
 
     @Override
     public boolean isActive() {
-        return javaChannel().socket().isBound();
+        // As java.nio.ServerSocketChannel.isBound() will continue to return true even after the channel was closed
+        // we will also need to check if it is open.
+        return isOpen() && javaChannel().socket().isBound();
     }
 
     @Override
@@ -122,6 +134,7 @@ public class NioServerSocketChannel extends AbstractNioMessageChannel
         return SocketUtils.localSocketAddress(javaChannel().socket());
     }
 
+    @SuppressJava6Requirement(reason = "Usage guarded by java version check")
     @Override
     protected void doBind(SocketAddress localAddress) throws Exception {
         if (PlatformDependent.javaVersion() >= 7) {
@@ -199,5 +212,39 @@ public class NioServerSocketChannel extends AbstractNioMessageChannel
         protected void autoReadCleared() {
             clearReadPending();
         }
+
+        @Override
+        public <T> boolean setOption(ChannelOption<T> option, T value) {
+            if (PlatformDependent.javaVersion() >= 7 && option instanceof NioChannelOption) {
+                return NioChannelOption.setOption(jdkChannel(), (NioChannelOption<T>) option, value);
+            }
+            return super.setOption(option, value);
+        }
+
+        @Override
+        public <T> T getOption(ChannelOption<T> option) {
+            if (PlatformDependent.javaVersion() >= 7 && option instanceof NioChannelOption) {
+                return NioChannelOption.getOption(jdkChannel(), (NioChannelOption<T>) option);
+            }
+            return super.getOption(option);
+        }
+
+        @Override
+        public Map<ChannelOption<?>, Object> getOptions() {
+            if (PlatformDependent.javaVersion() >= 7) {
+                return getOptions(super.getOptions(), NioChannelOption.getOptions(jdkChannel()));
+            }
+            return super.getOptions();
+        }
+
+        private ServerSocketChannel jdkChannel() {
+            return ((NioServerSocketChannel) channel).javaChannel();
+        }
+    }
+
+    // Override just to be able to call directly via unit tests.
+    @Override
+    protected boolean closeOnReadError(Throwable cause) {
+        return super.closeOnReadError(cause);
     }
 }

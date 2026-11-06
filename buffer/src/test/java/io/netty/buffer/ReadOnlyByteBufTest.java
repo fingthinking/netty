@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,32 +15,50 @@
  */
 package io.netty.buffer;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.nio.ReadOnlyBufferException;
 import java.nio.channels.GatheringByteChannel;
 import java.nio.channels.ScatteringByteChannel;
 
-import static io.netty.buffer.Unpooled.*;
-import static org.junit.Assert.*;
-import static org.mockito.Mockito.*;
+import static io.netty.buffer.ByteBufUtil.ensureWritableSuccess;
+import static io.netty.buffer.Unpooled.BIG_ENDIAN;
+import static io.netty.buffer.Unpooled.EMPTY_BUFFER;
+import static io.netty.buffer.Unpooled.LITTLE_ENDIAN;
+import static io.netty.buffer.Unpooled.buffer;
+import static io.netty.buffer.Unpooled.unmodifiableBuffer;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Tests read-only channel buffers
  */
 public class ReadOnlyByteBufTest {
 
-    @Test(expected = NullPointerException.class)
+    @Test
     public void shouldNotAllowNullInConstructor() {
-        new ReadOnlyByteBuf(null);
+        assertThrows(NullPointerException.class, new Executable() {
+            @Override
+            public void execute() {
+                new ReadOnlyByteBuf(null);
+            }
+        });
     }
 
     @Test
     public void testUnmodifiableBuffer() {
-        assertTrue(unmodifiableBuffer(buffer(1)) instanceof ReadOnlyByteBuf);
+        assertThat(unmodifiableBuffer(buffer(1))).isInstanceOf(ReadOnlyByteBuf.class);
     }
 
     @Test
@@ -60,16 +78,16 @@ public class ReadOnlyByteBufTest {
     @Test
     public void shouldReturnReadOnlyDerivedBuffer() {
         ByteBuf buf = unmodifiableBuffer(buffer(1));
-        assertTrue(buf.duplicate() instanceof ReadOnlyByteBuf);
-        assertTrue(buf.slice() instanceof ReadOnlyByteBuf);
-        assertTrue(buf.slice(0, 1) instanceof ReadOnlyByteBuf);
-        assertTrue(buf.duplicate() instanceof ReadOnlyByteBuf);
+        assertThat(buf.duplicate()).isInstanceOf(ReadOnlyByteBuf.class);
+        assertThat(buf.slice()).isInstanceOf(ReadOnlyByteBuf.class);
+        assertThat(buf.slice(0, 1)).isInstanceOf(ReadOnlyByteBuf.class);
+        assertThat(buf.duplicate()).isInstanceOf(ReadOnlyByteBuf.class);
     }
 
     @Test
     public void shouldReturnWritableCopy() {
         ByteBuf buf = unmodifiableBuffer(buffer(1));
-        assertFalse(buf.copy() instanceof ReadOnlyByteBuf);
+        assertThat(buf.copy()).isNotInstanceOf(ReadOnlyByteBuf.class);
     }
 
     @Test
@@ -116,59 +134,114 @@ public class ReadOnlyByteBufTest {
         assertEquals(27, roBuf.capacity());
     }
 
-    @Test(expected = UnsupportedOperationException.class)
+    @Test
     public void shouldRejectDiscardReadBytes() {
-        unmodifiableBuffer(EMPTY_BUFFER).discardReadBytes();
+        assertThrows(UnsupportedOperationException.class, new Executable() {
+            @Override
+            public void execute() {
+                unmodifiableBuffer(EMPTY_BUFFER).discardReadBytes();
+            }
+        });
     }
 
-    @Test(expected = UnsupportedOperationException.class)
+    @Test
     public void shouldRejectSetByte() {
-        unmodifiableBuffer(EMPTY_BUFFER).setByte(0, (byte) 0);
+        assertThrows(UnsupportedOperationException.class, new Executable() {
+            @Override
+            public void execute() {
+                unmodifiableBuffer(EMPTY_BUFFER).setByte(0, (byte) 0);
+            }
+        });
     }
 
-    @Test(expected = UnsupportedOperationException.class)
+    @Test
     public void shouldRejectSetShort() {
-        unmodifiableBuffer(EMPTY_BUFFER).setShort(0, (short) 0);
+        assertThrows(UnsupportedOperationException.class, new Executable() {
+            @Override
+            public void execute() {
+                unmodifiableBuffer(EMPTY_BUFFER).setShort(0, (short) 0);
+            }
+        });
     }
 
-    @Test(expected = UnsupportedOperationException.class)
+    @Test
     public void shouldRejectSetMedium() {
-        unmodifiableBuffer(EMPTY_BUFFER).setMedium(0, 0);
+        assertThrows(UnsupportedOperationException.class, new Executable() {
+            @Override
+            public void execute() {
+                unmodifiableBuffer(EMPTY_BUFFER).setMedium(0, 0);
+            }
+        });
     }
 
-    @Test(expected = UnsupportedOperationException.class)
+    @Test
     public void shouldRejectSetInt() {
-        unmodifiableBuffer(EMPTY_BUFFER).setInt(0, 0);
+        assertThrows(UnsupportedOperationException.class, new Executable() {
+            @Override
+            public void execute() {
+                unmodifiableBuffer(EMPTY_BUFFER).setInt(0, 0);
+            }
+        });
     }
 
-    @Test(expected = UnsupportedOperationException.class)
+    @Test
     public void shouldRejectSetLong() {
-        unmodifiableBuffer(EMPTY_BUFFER).setLong(0, 0);
+        assertThrows(UnsupportedOperationException.class, new Executable() {
+            @Override
+            public void execute() {
+                unmodifiableBuffer(EMPTY_BUFFER).setLong(0, 0);
+            }
+        });
     }
 
-    @Test(expected = UnsupportedOperationException.class)
-    public void shouldRejectSetBytes1() throws IOException {
-        unmodifiableBuffer(EMPTY_BUFFER).setBytes(0, (InputStream) null, 0);
+    @Test
+    public void shouldRejectSetBytes1() {
+        assertThrows(UnsupportedOperationException.class, new Executable() {
+            @Override
+            public void execute() throws IOException {
+                unmodifiableBuffer(EMPTY_BUFFER).setBytes(0, (InputStream) null, 0);
+            }
+        });
     }
 
-    @Test(expected = UnsupportedOperationException.class)
-    public void shouldRejectSetBytes2() throws IOException {
-        unmodifiableBuffer(EMPTY_BUFFER).setBytes(0, (ScatteringByteChannel) null, 0);
+    @Test
+    public void shouldRejectSetBytes2() {
+        assertThrows(UnsupportedOperationException.class, new Executable() {
+            @Override
+            public void execute() throws IOException {
+                unmodifiableBuffer(EMPTY_BUFFER).setBytes(0, (ScatteringByteChannel) null, 0);
+            }
+        });
     }
 
-    @Test(expected = UnsupportedOperationException.class)
+    @Test
     public void shouldRejectSetBytes3() {
-        unmodifiableBuffer(EMPTY_BUFFER).setBytes(0, (byte[]) null, 0, 0);
+        assertThrows(UnsupportedOperationException.class, new Executable() {
+            @Override
+            public void execute() throws IOException {
+                unmodifiableBuffer(EMPTY_BUFFER).setBytes(0, (byte[]) null, 0, 0);
+            }
+        });
     }
 
-    @Test(expected = UnsupportedOperationException.class)
+    @Test
     public void shouldRejectSetBytes4() {
-        unmodifiableBuffer(EMPTY_BUFFER).setBytes(0, (ByteBuf) null, 0, 0);
+        assertThrows(UnsupportedOperationException.class, new Executable() {
+            @Override
+            public void execute() {
+                unmodifiableBuffer(EMPTY_BUFFER).setBytes(0, (ByteBuf) null, 0, 0);
+            }
+        });
     }
 
-    @Test(expected = UnsupportedOperationException.class)
+    @Test
     public void shouldRejectSetBytes5() {
-        unmodifiableBuffer(EMPTY_BUFFER).setBytes(0, (ByteBuffer) null);
+        assertThrows(UnsupportedOperationException.class, new Executable() {
+            @Override
+            public void execute() {
+                unmodifiableBuffer(EMPTY_BUFFER).setBytes(0, (ByteBuffer) null);
+            }
+        });
     }
 
     @Test
@@ -182,6 +255,41 @@ public class ReadOnlyByteBufTest {
     }
 
     @Test
+    public void ensureWritableIntStatusShouldFailButNotThrow() {
+        ensureWritableIntStatusShouldFailButNotThrow(false);
+    }
+
+    @Test
+    public void ensureWritableForceIntStatusShouldFailButNotThrow() {
+        ensureWritableIntStatusShouldFailButNotThrow(true);
+    }
+
+    private static void ensureWritableIntStatusShouldFailButNotThrow(boolean force) {
+        ByteBuf buf = buffer(1);
+        ByteBuf readOnly = buf.asReadOnly();
+        int result = readOnly.ensureWritable(1, force);
+        assertEquals(1, result);
+        assertFalse(ensureWritableSuccess(result));
+        readOnly.release();
+    }
+
+    @Test
+    public void ensureWritableShouldThrow() {
+        ByteBuf buf = buffer(1);
+        final ByteBuf readOnly = buf.asReadOnly();
+        try {
+            assertThrows(ReadOnlyBufferException.class, new Executable() {
+                @Override
+                public void execute() {
+                    readOnly.ensureWritable(1);
+                }
+            });
+        } finally {
+            buf.release();
+        }
+    }
+
+    @Test
     public void asReadOnly() {
         ByteBuf buf = buffer(1);
         ByteBuf readOnly = buf.asReadOnly();
@@ -189,4 +297,59 @@ public class ReadOnlyByteBufTest {
         assertSame(readOnly, readOnly.asReadOnly());
         readOnly.release();
     }
+
+    @Test
+    public void testDuplicateOfSliceHasTheSameCapacityAsTheSlice() {
+        ByteBuf buffer = buffer(16);
+
+        ByteBuf slice = buffer.slice();
+        ByteBuf duplicate = slice.duplicate();
+        assertEquals(slice.capacity(), duplicate.capacity());
+
+        slice = buffer.slice(0, buffer.capacity() - 2);
+        duplicate = slice.duplicate();
+        assertEquals(slice.capacity(), duplicate.capacity());
+
+        slice = buffer.slice();
+        duplicate = slice.retainedDuplicate();
+        assertEquals(slice.capacity(), duplicate.capacity());
+        duplicate.release();
+
+        slice = buffer.slice(0, buffer.capacity() - 2);
+        duplicate = slice.retainedDuplicate();
+        assertEquals(slice.capacity(), duplicate.capacity());
+        duplicate.release();
+
+        buffer.release();
+    }
+
+    @Test
+    public void testDuplicateOfRetainedSliceHasTheSameCapacityAsTheSlice() {
+        ByteBuf buffer = buffer(16);
+
+        ByteBuf slice = buffer.retainedSlice();
+        ByteBuf duplicate = slice.duplicate();
+        assertEquals(slice.capacity(), duplicate.capacity());
+        slice.release();
+
+        slice = buffer.retainedSlice(0, buffer.capacity() - 2);
+        duplicate = slice.duplicate();
+        assertEquals(slice.capacity(), duplicate.capacity());
+        slice.release();
+
+        slice = buffer.retainedSlice();
+        duplicate = slice.retainedDuplicate();
+        assertEquals(slice.capacity(), duplicate.capacity());
+        slice.release();
+        duplicate.release();
+
+        slice = buffer.retainedSlice(0, buffer.capacity() - 2);
+        duplicate = slice.retainedDuplicate();
+        assertEquals(slice.capacity(), duplicate.capacity());
+        slice.release();
+        duplicate.release();
+
+        buffer.release();
+    }
+
 }

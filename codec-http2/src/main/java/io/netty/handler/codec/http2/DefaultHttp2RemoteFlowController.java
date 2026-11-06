@@ -5,7 +5,7 @@
  * "License"); you may not use this file except in compliance with the License. You may obtain a
  * copy of the License at:
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software distributed under the License
  * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
@@ -15,9 +15,6 @@
 package io.netty.handler.codec.http2;
 
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.codec.http2.StreamByteDistributor.Writer;
-import io.netty.util.BooleanSupplier;
-import io.netty.util.internal.UnstableApi;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -25,13 +22,19 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 
 import static io.netty.handler.codec.http2.Http2CodecUtil.DEFAULT_WINDOW_SIZE;
+import static io.netty.handler.codec.http2.Http2CodecUtil.MAX_INITIAL_WINDOW_SIZE;
 import static io.netty.handler.codec.http2.Http2CodecUtil.MAX_WEIGHT;
 import static io.netty.handler.codec.http2.Http2CodecUtil.MIN_WEIGHT;
 import static io.netty.handler.codec.http2.Http2Error.FLOW_CONTROL_ERROR;
 import static io.netty.handler.codec.http2.Http2Error.INTERNAL_ERROR;
+import static io.netty.handler.codec.http2.Http2Error.STREAM_CLOSED;
+import static io.netty.handler.codec.http2.Http2Exception.connectionError;
 import static io.netty.handler.codec.http2.Http2Exception.streamError;
 import static io.netty.handler.codec.http2.Http2Stream.State.HALF_CLOSED_LOCAL;
+import static io.netty.handler.codec.http2.Http2Stream.State.RESERVED_LOCAL;
+import static io.netty.handler.codec.http2.Http2Stream.State.RESERVED_REMOTE;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
+import static io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 
@@ -41,7 +44,6 @@ import static java.lang.Math.min;
  * This class is <strong>NOT</strong> thread safe. The assumption is all methods must be invoked from a single thread.
  * Typically this thread is the event loop thread for the {@link ChannelHandlerContext} managed by this class.
  */
-@UnstableApi
 public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowController {
     private static final InternalLogger logger =
             InternalLoggerFactory.getInstance(DefaultHttp2RemoteFlowController.class);
@@ -94,21 +96,35 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
             @Override
             public void onStreamActive(Http2Stream stream) {
                 // If the object was previously created, but later activated then we have to ensure the proper
-                // initialWindowSize is used.
-                monitor.windowSize(state(stream), initialWindowSize);
+                // initialWindowSize is used. The peer might also have already granted credit for a reserved stream
+                // via WINDOW_UPDATE (RFC 9113, section 5.1), so add the initialWindowSize to it instead of replacing
+                // it. The window of a stream that was not reserved before is always 0 here. A WINDOW_UPDATE that would
+                // make the sum exceed MAX_INITIAL_WINDOW_SIZE is rejected (see FlowState.incrementStreamWindow), but a
+                // SETTINGS_INITIAL_WINDOW_SIZE increase after such credit was granted can still do so. Unlike for
+                // active streams this is not detected when the SETTINGS are applied, as only active streams are
+                // visited there, and we can't signal an error from here. It needs a misbehaving peer, so clamp the
+                // window and log it.
+                FlowState state = state(stream);
+                long window = (long) initialWindowSize + state.windowSize();
+                if (window > MAX_INITIAL_WINDOW_SIZE) {
+                    logger.warn("{} Window of stream {} would be {} when it becomes active, clamping it to {}",
+                            ctx != null ? ctx.channel() : null, stream.id(), window, MAX_INITIAL_WINDOW_SIZE);
+                    window = MAX_INITIAL_WINDOW_SIZE;
+                }
+                monitor.windowSize(state, (int) window);
             }
 
             @Override
             public void onStreamClosed(Http2Stream stream) {
                 // Any pending frames can never be written, cancel and
                 // write errors for any pending frames.
-                state(stream).cancel();
+                state(stream).cancel(STREAM_CLOSED, null);
             }
 
             @Override
             public void onStreamHalfClosed(Http2Stream stream) {
-                if (HALF_CLOSED_LOCAL.equals(stream.state())) {
-                    /**
+                if (HALF_CLOSED_LOCAL == stream.state()) {
+                    /*
                      * When this method is called there should not be any
                      * pending frames left if the API is used correctly. However,
                      * it is possible that a erroneous application can sneak
@@ -119,7 +135,7 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
                      *
                      * This is to cancel any such illegal writes.
                      */
-                    state(stream).cancel();
+                    state(stream).cancel(STREAM_CLOSED, null);
                 }
             }
         });
@@ -274,7 +290,7 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
         private final Http2Stream stream;
         private final Deque<FlowControlled> pendingWriteQueue;
         private int window;
-        private int pendingBytes;
+        private long pendingBytes;
         private boolean markedWritable;
 
         /**
@@ -285,12 +301,6 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
          * Set to true if cancel() was called.
          */
         private boolean cancelled;
-        private BooleanSupplier isWritableSupplier = new BooleanSupplier() {
-            @Override
-            public boolean get() throws Exception {
-                return windowSize() > pendingBytes();
-            }
-        };
 
         FlowState(Http2Stream stream) {
             this.stream = stream;
@@ -298,15 +308,19 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
         }
 
         /**
+         * Determine if the stream associated with this object is reserved, so it is not active yet.
+         */
+        boolean isReserved() {
+            Http2Stream.State state = stream.state();
+            return state == RESERVED_LOCAL || state == RESERVED_REMOTE;
+        }
+
+        /**
          * Determine if the stream associated with this object is writable.
          * @return {@code true} if the stream associated with this object is writable.
          */
         boolean isWritable() {
-            try {
-                return isWritableSupplier.get();
-            } catch (Throwable cause) {
-                throw new Error("isWritableSupplier should never throw!", cause);
-            }
+            return windowSize() > pendingBytes() && !cancelled;
         }
 
         /**
@@ -404,7 +418,7 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
                 // If a cancellation occurred while writing, call cancel again to
                 // clear and error all of the pending writes.
                 if (cancelled) {
-                    cancel(cause);
+                    cancel(INTERNAL_ERROR, cause);
                 }
             }
             return writtenBytes;
@@ -417,6 +431,12 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
             if (delta > 0 && Integer.MAX_VALUE - delta < window) {
                 throw streamError(stream.id(), FLOW_CONTROL_ERROR,
                         "Window size overflow for stream: %d", stream.id());
+            }
+            if (delta > 0 && isReserved() && (long) window + delta + initialWindowSize > MAX_INITIAL_WINDOW_SIZE) {
+                // The initialWindowSize is added to the window of a reserved stream when it becomes active, and the
+                // window must not exceed 2^31-1 then either (RFC 9113, section 6.9.1).
+                throw streamError(stream.id(), FLOW_CONTROL_ERROR,
+                        "Window size overflow for reserved stream: %d", stream.id());
             }
             window += delta;
 
@@ -432,7 +452,7 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
         }
 
         @Override
-        public int pendingBytes() {
+        public long pendingBytes() {
             return pendingBytes;
         }
 
@@ -467,42 +487,37 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
         }
 
         /**
-         * Returns the the head of the pending queue, or {@code null} if empty.
+         * Returns the head of the pending queue, or {@code null} if empty.
          */
         private FlowControlled peek() {
             return pendingWriteQueue.peek();
         }
 
         /**
-         * Any operations that may be pending are cleared and the status of these operations is failed.
-         */
-        void cancel() {
-            cancel(null);
-        }
-
-        /**
          * Clears the pending queue and writes errors for each remaining frame.
+         * @param error the {@link Http2Error} to use.
          * @param cause the {@link Throwable} that caused this method to be invoked.
          */
-        private void cancel(Throwable cause) {
+        void cancel(Http2Error error, Throwable cause) {
             cancelled = true;
             // Ensure that the queue can't be modified while we are writing.
             if (writing) {
                 return;
             }
 
-            for (;;) {
-                FlowControlled frame = pendingWriteQueue.poll();
-                if (frame == null) {
-                    break;
-                }
-                writeError(frame, streamError(stream.id(), INTERNAL_ERROR, cause,
-                                              "Stream closed before write could take place"));
+            FlowControlled frame = pendingWriteQueue.poll();
+            if (frame != null) {
+                // Only create exception once and reuse to reduce overhead of filling in the stacktrace.
+                final Http2Exception exception = streamError(stream.id(), error, cause,
+                        "Stream closed before write could take place");
+                do {
+                    writeError(frame, exception);
+                    frame = pendingWriteQueue.poll();
+                } while (frame != null);
             }
 
             streamByteDistributor.updateStreamableBytes(this);
 
-            isWritableSupplier = BooleanSupplier.FALSE_SUPPLIER;
             monitor.stateCancelled(this);
         }
 
@@ -553,15 +568,14 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
     /**
      * Abstract class which provides common functionality for writability monitor implementations.
      */
-    private class WritabilityMonitor {
+    private class WritabilityMonitor implements StreamByteDistributor.Writer {
         private boolean inWritePendingBytes;
         private long totalPendingBytes;
-        private final Writer writer = new StreamByteDistributor.Writer() {
-            @Override
-            public void write(Http2Stream stream, int numBytes) {
-                state(stream).writeAllocatedBytes(numBytes);
-            }
-        };
+
+        @Override
+        public final void write(Http2Stream stream, int numBytes) {
+            state(stream).writeAllocatedBytes(numBytes);
+        }
 
         /**
          * Called when the writability of the underlying channel changes.
@@ -640,7 +654,7 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
                 // Make sure we always write at least once, regardless if we have bytesToWrite or not.
                 // This ensures that zero-length frames will always be written.
                 for (;;) {
-                    if (!streamByteDistributor.distribute(bytesToWrite, writer) ||
+                    if (!streamByteDistributor.distribute(bytesToWrite, this) ||
                         (bytesToWrite = writableBytes()) <= 0 ||
                         !isChannelWritable0()) {
                         break;
@@ -652,16 +666,21 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
         }
 
         void initialWindowSize(int newWindowSize) throws Http2Exception {
-            if (newWindowSize < 0) {
-                throw new IllegalArgumentException("Invalid initial window size: " + newWindowSize);
-            }
+            checkPositiveOrZero(newWindowSize, "newWindowSize");
 
             final int delta = newWindowSize - initialWindowSize;
             initialWindowSize = newWindowSize;
             connection.forEachActiveStream(new Http2StreamVisitor() {
                 @Override
                 public boolean visit(Http2Stream stream) throws Http2Exception {
-                    state(stream).incrementStreamWindow(delta);
+                    try {
+                        state(stream).incrementStreamWindow(delta);
+                    } catch (Http2Exception e) {
+                        // RFC 9113 Section 6.9.2 requires a connection error if a SETTINGS change causes overflow.
+                        throw connectionError(FLOW_CONTROL_ERROR, e,
+                                "Window size overflow for stream: %d after SETTINGS_INITIAL_WINDOW_SIZE change",
+                                stream.id());
+                    }
                     return true;
                 }
             });
@@ -685,21 +704,20 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
      * isChannelWritable()
      * </pre>
      */
-    private final class ListenerWritabilityMonitor extends WritabilityMonitor {
+    private final class ListenerWritabilityMonitor extends WritabilityMonitor implements Http2StreamVisitor {
         private final Listener listener;
-        private final Http2StreamVisitor checkStreamWritabilityVisitor = new Http2StreamVisitor() {
-            @Override
-            public boolean visit(Http2Stream stream) throws Http2Exception {
-                FlowState state = state(stream);
-                if (isWritable(state) != state.markedWritability()) {
-                    notifyWritabilityChanged(state);
-                }
-                return true;
-            }
-        };
 
         ListenerWritabilityMonitor(Listener listener) {
             this.listener = listener;
+        }
+
+        @Override
+        public boolean visit(Http2Stream stream) throws Http2Exception {
+            FlowState state = state(stream);
+            if (isWritable(state) != state.markedWritability()) {
+                notifyWritabilityChanged(state);
+            }
+            return true;
         }
 
         @Override
@@ -765,7 +783,8 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
             try {
                 listener.writabilityChanged(state.stream);
             } catch (Throwable cause) {
-                logger.error("Caught Throwable from listener.writabilityChanged", cause);
+                logger.error("{} Caught Throwable from listener.writabilityChanged for {}",
+                        ctx.channel(), state.stream, cause);
             }
         }
 
@@ -781,7 +800,7 @@ public class DefaultHttp2RemoteFlowController implements Http2RemoteFlowControll
         private void checkAllWritabilityChanged() throws Http2Exception {
             // Make sure we mark that we have notified as a result of this change.
             connectionState.markedWritability(isWritableConnection());
-            connection.forEachActiveStream(checkStreamWritabilityVisitor);
+            connection.forEachActiveStream(this);
         }
     }
 }

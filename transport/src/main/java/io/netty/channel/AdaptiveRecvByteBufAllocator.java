@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -17,6 +17,10 @@ package io.netty.channel;
 
 import java.util.ArrayList;
 import java.util.List;
+
+import static io.netty.util.internal.ObjectUtil.checkPositive;
+import static java.lang.Math.max;
+import static java.lang.Math.min;
 
 /**
  * The {@link RecvByteBufAllocator} that automatically increases and
@@ -30,9 +34,10 @@ import java.util.List;
  */
 public class AdaptiveRecvByteBufAllocator extends DefaultMaxMessagesRecvByteBufAllocator {
 
-    static final int DEFAULT_MINIMUM = 64;
-    static final int DEFAULT_INITIAL = 1024;
-    static final int DEFAULT_MAXIMUM = 65536;
+    public static final int DEFAULT_MINIMUM = 64;
+    // Use an initial value that is bigger than the common MTU of 1500
+    public static final int DEFAULT_INITIAL = 2048;
+    public static final int DEFAULT_MAXIMUM = 65536;
 
     private static final int INDEX_INCREMENT = 4;
     private static final int INDEX_DECREMENT = 1;
@@ -45,6 +50,7 @@ public class AdaptiveRecvByteBufAllocator extends DefaultMaxMessagesRecvByteBufA
             sizeTable.add(i);
         }
 
+        // Suppress a warning since i becomes negative when an integer overflow happens
         for (int i = 512; i > 0; i <<= 1) {
             sizeTable.add(i);
         }
@@ -88,16 +94,32 @@ public class AdaptiveRecvByteBufAllocator extends DefaultMaxMessagesRecvByteBufA
     private final class HandleImpl extends MaxMessageHandle {
         private final int minIndex;
         private final int maxIndex;
+        private final int minCapacity;
+        private final int maxCapacity;
         private int index;
         private int nextReceiveBufferSize;
         private boolean decreaseNow;
 
-        public HandleImpl(int minIndex, int maxIndex, int initial) {
+        HandleImpl(int minIndex, int maxIndex, int initialIndex, int minCapacity, int maxCapacity) {
             this.minIndex = minIndex;
             this.maxIndex = maxIndex;
 
-            index = getSizeTableIndex(initial);
-            nextReceiveBufferSize = SIZE_TABLE[index];
+            index = initialIndex;
+            nextReceiveBufferSize = max(SIZE_TABLE[index], minCapacity);
+            this.minCapacity = minCapacity;
+            this.maxCapacity = maxCapacity;
+        }
+
+        @Override
+        public void lastBytesRead(int bytes) {
+            // If we read as much as we asked for we should check if we need to ramp up the size of our next guess.
+            // This helps adjust more quickly when large amounts of data is pending and can avoid going back to
+            // the selector to check for more data. Going back to the selector can add significant latency for large
+            // data transfers.
+            if (bytes == attemptedBytesRead()) {
+                record(bytes);
+            }
+            super.lastBytesRead(bytes);
         }
 
         @Override
@@ -106,17 +128,17 @@ public class AdaptiveRecvByteBufAllocator extends DefaultMaxMessagesRecvByteBufA
         }
 
         private void record(int actualReadBytes) {
-            if (actualReadBytes <= SIZE_TABLE[Math.max(0, index - INDEX_DECREMENT - 1)]) {
+            if (actualReadBytes <= SIZE_TABLE[max(0, index - INDEX_DECREMENT)]) {
                 if (decreaseNow) {
-                    index = Math.max(index - INDEX_DECREMENT, minIndex);
-                    nextReceiveBufferSize = SIZE_TABLE[index];
+                    index = max(index - INDEX_DECREMENT, minIndex);
+                    nextReceiveBufferSize = max(SIZE_TABLE[index], minCapacity);
                     decreaseNow = false;
                 } else {
                     decreaseNow = true;
                 }
             } else if (actualReadBytes >= nextReceiveBufferSize) {
-                index = Math.min(index + INDEX_INCREMENT, maxIndex);
-                nextReceiveBufferSize = SIZE_TABLE[index];
+                index = min(index + INDEX_INCREMENT, maxIndex);
+                nextReceiveBufferSize = min(SIZE_TABLE[index], maxCapacity);
                 decreaseNow = false;
             }
         }
@@ -129,7 +151,9 @@ public class AdaptiveRecvByteBufAllocator extends DefaultMaxMessagesRecvByteBufA
 
     private final int minIndex;
     private final int maxIndex;
-    private final int initial;
+    private final int initialIndex;
+    private final int minCapacity;
+    private final int maxCapacity;
 
     /**
      * Creates a new predictor with the default parameters.  With the default
@@ -148,9 +172,7 @@ public class AdaptiveRecvByteBufAllocator extends DefaultMaxMessagesRecvByteBufA
      * @param maximum  the inclusive upper bound of the expected buffer size
      */
     public AdaptiveRecvByteBufAllocator(int minimum, int initial, int maximum) {
-        if (minimum <= 0) {
-            throw new IllegalArgumentException("minimum: " + minimum);
-        }
+        checkPositive(minimum, "minimum");
         if (initial < minimum) {
             throw new IllegalArgumentException("initial: " + initial);
         }
@@ -172,12 +194,25 @@ public class AdaptiveRecvByteBufAllocator extends DefaultMaxMessagesRecvByteBufA
             this.maxIndex = maxIndex;
         }
 
-        this.initial = initial;
+        int initialIndex = getSizeTableIndex(initial);
+        if (SIZE_TABLE[initialIndex] > initial) {
+            this.initialIndex = initialIndex - 1;
+        } else {
+            this.initialIndex = initialIndex;
+        }
+        this.minCapacity = minimum;
+        this.maxCapacity = maximum;
     }
 
     @SuppressWarnings("deprecation")
     @Override
     public Handle newHandle() {
-        return new HandleImpl(minIndex, maxIndex, initial);
+        return new HandleImpl(minIndex, maxIndex, initialIndex, minCapacity, maxCapacity);
+    }
+
+    @Override
+    public AdaptiveRecvByteBufAllocator respectMaybeMoreData(boolean respectMaybeMoreData) {
+        super.respectMaybeMoreData(respectMaybeMoreData);
+        return this;
     }
 }

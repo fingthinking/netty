@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -52,26 +52,52 @@ public enum HttpStatusClass {
         }
     };
 
+    private static final HttpStatusClass[] statusArray = new HttpStatusClass[6];
+    static {
+        statusArray[1] = INFORMATIONAL;
+        statusArray[2] = SUCCESS;
+        statusArray[3] = REDIRECTION;
+        statusArray[4] = CLIENT_ERROR;
+        statusArray[5] = SERVER_ERROR;
+    }
+
     /**
      * Returns the class of the specified HTTP status code.
      */
     public static HttpStatusClass valueOf(int code) {
-        if (INFORMATIONAL.contains(code)) {
-            return INFORMATIONAL;
+        if (UNKNOWN.contains(code)) {
+            return UNKNOWN;
         }
-        if (SUCCESS.contains(code)) {
-            return SUCCESS;
-        }
-        if (REDIRECTION.contains(code)) {
-            return REDIRECTION;
-        }
-        if (CLIENT_ERROR.contains(code)) {
-            return CLIENT_ERROR;
-        }
-        if (SERVER_ERROR.contains(code)) {
-            return SERVER_ERROR;
+        return statusArray[fast_div100(code)];
+    }
+
+    /**
+     * @param dividend Must >= 0
+     * @return dividend/100
+     */
+    private static int fast_div100(int dividend) {
+        return (int) ((dividend * 1374389535L) >> 37);
+    }
+
+    /**
+     * Returns the class of the specified HTTP status code.
+     * @param code Just the numeric portion of the http status code.
+     */
+    public static HttpStatusClass valueOf(CharSequence code) {
+        if (code != null && code.length() == 3) {
+            char c0 = code.charAt(0);
+            return isDigit(c0) && isDigit(code.charAt(1)) && isDigit(code.charAt(2)) ? valueOf(digit(c0) * 100)
+                                                                                     : UNKNOWN;
         }
         return UNKNOWN;
+    }
+
+    private static int digit(char c) {
+        return c - '0';
+    }
+
+    private static boolean isDigit(char c) {
+        return c >= '0' && c <= '9';
     }
 
     private final int min;
@@ -81,7 +107,7 @@ public enum HttpStatusClass {
     HttpStatusClass(int min, int max, String defaultReasonPhrase) {
         this.min = min;
         this.max = max;
-        this.defaultReasonPhrase = new AsciiString(defaultReasonPhrase);
+        this.defaultReasonPhrase = AsciiString.cached(defaultReasonPhrase);
     }
 
     /**

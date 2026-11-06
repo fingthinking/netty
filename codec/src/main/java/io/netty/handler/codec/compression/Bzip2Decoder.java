@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -21,12 +21,26 @@ import io.netty.handler.codec.ByteToMessageDecoder;
 
 import java.util.List;
 
-import static io.netty.handler.codec.compression.Bzip2Constants.*;
+import static io.netty.handler.codec.compression.Bzip2Constants.BASE_BLOCK_SIZE;
+import static io.netty.handler.codec.compression.Bzip2Constants.BLOCK_HEADER_MAGIC_1;
+import static io.netty.handler.codec.compression.Bzip2Constants.BLOCK_HEADER_MAGIC_2;
+import static io.netty.handler.codec.compression.Bzip2Constants.END_OF_STREAM_MAGIC_1;
+import static io.netty.handler.codec.compression.Bzip2Constants.END_OF_STREAM_MAGIC_2;
+import static io.netty.handler.codec.compression.Bzip2Constants.HUFFMAN_DECODE_MAX_CODE_LENGTH;
+import static io.netty.handler.codec.compression.Bzip2Constants.HUFFMAN_MAXIMUM_TABLES;
+import static io.netty.handler.codec.compression.Bzip2Constants.HUFFMAN_MAX_ALPHABET_SIZE;
+import static io.netty.handler.codec.compression.Bzip2Constants.HUFFMAN_MINIMUM_TABLES;
+import static io.netty.handler.codec.compression.Bzip2Constants.HUFFMAN_SELECTOR_LIST_MAX_LENGTH;
+import static io.netty.handler.codec.compression.Bzip2Constants.HUFFMAN_SYMBOL_RANGE_SIZE;
+import static io.netty.handler.codec.compression.Bzip2Constants.MAGIC_NUMBER;
+import static io.netty.handler.codec.compression.Bzip2Constants.MAX_BLOCK_SIZE;
+import static io.netty.handler.codec.compression.Bzip2Constants.MAX_SELECTORS;
+import static io.netty.handler.codec.compression.Bzip2Constants.MIN_BLOCK_SIZE;
 
 /**
  * Uncompresses a {@link ByteBuf} encoded with the Bzip2 format.
  *
- * See <a href="http://en.wikipedia.org/wiki/Bzip2">Bzip2</a>.
+ * See <a href="https://en.wikipedia.org/wiki/Bzip2">Bzip2</a>.
  */
 public class Bzip2Decoder extends ByteToMessageDecoder {
     /**
@@ -42,7 +56,8 @@ public class Bzip2Decoder extends ByteToMessageDecoder {
         RECEIVE_SELECTORS,
         RECEIVE_HUFFMAN_LENGTH,
         DECODE_HUFFMAN_DATA,
-        EOF
+        EOF,
+        CORRUPTED
     }
     private State currentState = State.INIT;
 
@@ -82,6 +97,18 @@ public class Bzip2Decoder extends ByteToMessageDecoder {
             return;
         }
 
+        try {
+            decodeStateMachine(ctx, in, out);
+        } catch (Exception e) {
+            // The state is inconsistent after an error, so skip all further input.
+            currentState = State.CORRUPTED;
+            blockDecompressor = null;
+            huffmanStageDecoder = null;
+            throw e;
+        }
+    }
+
+    private void decodeStateMachine(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
         final Bzip2BitReader reader = this.reader;
         reader.setByteBuf(in);
 
@@ -104,6 +131,7 @@ public class Bzip2Decoder extends ByteToMessageDecoder {
 
                 streamCRC = 0;
                 currentState = State.INIT_BLOCK;
+                 // fall through
             case INIT_BLOCK:
                 if (!reader.hasReadableBytes(10)) {
                     return;
@@ -125,6 +153,7 @@ public class Bzip2Decoder extends ByteToMessageDecoder {
                 }
                 blockCRC = reader.readInt();
                 currentState = State.INIT_BLOCK_PARAMS;
+                // fall through
             case INIT_BLOCK_PARAMS:
                 if (!reader.hasReadableBits(25)) {
                     return;
@@ -135,12 +164,14 @@ public class Bzip2Decoder extends ByteToMessageDecoder {
                 blockDecompressor = new Bzip2BlockDecompressor(this.blockSize, blockCRC,
                                                                 blockRandomised, bwtStartPointer, reader);
                 currentState = State.RECEIVE_HUFFMAN_USED_MAP;
+                // fall through
             case RECEIVE_HUFFMAN_USED_MAP:
                 if (!reader.hasReadableBits(16)) {
                     return;
                 }
                 blockDecompressor.huffmanInUse16 = reader.readBits(16);
                 currentState = State.RECEIVE_HUFFMAN_USED_BITMAPS;
+                // fall through
             case RECEIVE_HUFFMAN_USED_BITMAPS:
                 Bzip2BlockDecompressor blockDecompressor = this.blockDecompressor;
                 final int inUse16 = blockDecompressor.huffmanInUse16;
@@ -175,6 +206,7 @@ public class Bzip2Decoder extends ByteToMessageDecoder {
                 }
                 huffmanStageDecoder = new Bzip2HuffmanStageDecoder(reader, totalTables, alphaSize);
                 currentState = State.RECEIVE_SELECTORS_NUMBER;
+                // fall through
             case RECEIVE_SELECTORS_NUMBER:
                 if (!reader.hasReadableBits(15)) {
                     return;
@@ -186,6 +218,7 @@ public class Bzip2Decoder extends ByteToMessageDecoder {
                 huffmanStageDecoder.selectors = new byte[totalSelectors];
 
                 currentState = State.RECEIVE_SELECTORS;
+                // fall through
             case RECEIVE_SELECTORS:
                 Bzip2HuffmanStageDecoder huffmanStageDecoder = this.huffmanStageDecoder;
                 byte[] selectors = huffmanStageDecoder.selectors;
@@ -204,11 +237,15 @@ public class Bzip2Decoder extends ByteToMessageDecoder {
                     int index = 0;
                     while (reader.readBoolean()) {
                         index++;
+                        if (index >= huffmanStageDecoder.totalTables) {
+                            throw new DecompressionException("incorrect selector index " + index);
+                        }
                     }
                     selectors[currSelector] = tableMtf.indexToFront(index);
                 }
 
                 currentState = State.RECEIVE_HUFFMAN_LENGTH;
+                // fall through
             case RECEIVE_HUFFMAN_LENGTH:
                 huffmanStageDecoder = this.huffmanStageDecoder;
                 totalTables = huffmanStageDecoder.totalTables;
@@ -250,6 +287,10 @@ public class Bzip2Decoder extends ByteToMessageDecoder {
                                 break loop;
                             }
                         }
+                        if (currLength < 1 || currLength > HUFFMAN_DECODE_MAX_CODE_LENGTH) {
+                            throw new DecompressionException("Bzip2 block Huffman code length not in range 1.."
+                                    + HUFFMAN_DECODE_MAX_CODE_LENGTH);
+                        }
                         codeLength[currGroup][currAlpha] = (byte) currLength;
                     }
                     currLength = -1;
@@ -268,6 +309,7 @@ public class Bzip2Decoder extends ByteToMessageDecoder {
                 // Finally create the Huffman tables
                 huffmanStageDecoder.createHuffmanDecodingTables();
                 currentState = State.DECODE_HUFFMAN_DATA;
+                // fall through
             case DECODE_HUFFMAN_DATA:
                 blockDecompressor = this.blockDecompressor;
                 final int oldReaderIndex = in.readerIndex();
@@ -283,27 +325,29 @@ public class Bzip2Decoder extends ByteToMessageDecoder {
                 }
 
                 final int blockLength = blockDecompressor.blockLength();
-                final ByteBuf uncompressed = ctx.alloc().buffer(blockLength);
-                boolean success = false;
+                ByteBuf uncompressed = ctx.alloc().buffer(blockLength);
                 try {
                     int uncByte;
                     while ((uncByte = blockDecompressor.read()) >= 0) {
                         uncompressed.writeByte(uncByte);
                     }
-
+                    // We did read all the data, lets reset the state and do the CRC check.
+                    currentState = State.INIT_BLOCK;
                     int currentBlockCRC = blockDecompressor.checkCRC();
                     streamCRC = (streamCRC << 1 | streamCRC >>> 31) ^ currentBlockCRC;
 
                     out.add(uncompressed);
-                    success = true;
+                    uncompressed = null;
                 } finally {
-                    if (!success) {
+                    if (uncompressed != null) {
                         uncompressed.release();
                     }
                 }
-                currentState = State.INIT_BLOCK;
-                break;
+                // Return here so the ByteBuf that was put in the List will be forwarded to the user and so can be
+                // released as soon as possible.
+                return;
             case EOF:
+            case CORRUPTED:
                 in.skipBytes(in.readableBytes());
                 return;
             default:

@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,7 +15,7 @@
  */
 package io.netty.handler.codec.http2;
 
-import io.netty.util.internal.UnstableApi;
+import io.netty.util.internal.StringUtil;
 
 import static io.netty.handler.codec.http2.Http2CodecUtil.verifyPadding;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
@@ -23,7 +23,6 @@ import static io.netty.util.internal.ObjectUtil.checkNotNull;
 /**
  * The default {@link Http2HeadersFrame} implementation.
  */
-@UnstableApi
 public final class DefaultHttp2HeadersFrame extends AbstractHttp2StreamFrame implements Http2HeadersFrame {
     private final Http2Headers headers;
     private final boolean endStream;
@@ -63,8 +62,8 @@ public final class DefaultHttp2HeadersFrame extends AbstractHttp2StreamFrame imp
     }
 
     @Override
-    public DefaultHttp2HeadersFrame streamId(int streamId) {
-        super.streamId(streamId);
+    public DefaultHttp2HeadersFrame stream(Http2FrameStream stream) {
+        super.stream(stream);
         return this;
     }
 
@@ -90,8 +89,8 @@ public final class DefaultHttp2HeadersFrame extends AbstractHttp2StreamFrame imp
 
     @Override
     public String toString() {
-        return "DefaultHttp2HeadersFrame(streamId=" + streamId() + ", headers=" + headers
-               + ", endStream=" + endStream + ", padding=" + padding + ")";
+        return StringUtil.simpleClassName(this) + "(stream=" + stream() + ", headers=" + headers
+               + ", endStream=" + endStream + ", padding=" + padding + ')';
     }
 
     @Override

@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -137,14 +137,14 @@ class JdkBaseApplicationProtocolNegotiator implements JdkApplicationProtocolNego
 
         @Override
         public void unsupported() {
-            engineWrapper.getSession().setApplicationProtocol(null);
+            engineWrapper.setNegotiatedApplicationProtocol(null);
         }
 
         @Override
         public String select(List<String> protocols) throws Exception {
             for (String p : supportedProtocols) {
                 if (protocols.contains(p)) {
-                    engineWrapper.getSession().setApplicationProtocol(p);
+                    engineWrapper.setNegotiatedApplicationProtocol(p);
                     return p;
                 }
             }
@@ -152,7 +152,7 @@ class JdkBaseApplicationProtocolNegotiator implements JdkApplicationProtocolNego
         }
 
         public String noSelectMatchFound() throws Exception {
-            engineWrapper.getSession().setApplicationProtocol(null);
+            engineWrapper.setNegotiatedApplicationProtocol(null);
             return null;
         }
     }
@@ -179,13 +179,13 @@ class JdkBaseApplicationProtocolNegotiator implements JdkApplicationProtocolNego
 
         @Override
         public void unsupported() {
-            engineWrapper.getSession().setApplicationProtocol(null);
+            engineWrapper.setNegotiatedApplicationProtocol(null);
         }
 
         @Override
         public void selected(String protocol) throws Exception {
             if (supportedProtocols.contains(protocol)) {
-                engineWrapper.getSession().setApplicationProtocol(protocol);
+                engineWrapper.setNegotiatedApplicationProtocol(protocol);
             } else {
                 noSelectedMatchFound(protocol);
             }

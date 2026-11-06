@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -17,21 +17,26 @@
 package io.netty.handler.ssl;
 
 import io.netty.util.internal.PlatformDependent;
+import io.netty.util.internal.UnstableApi;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static java.util.Collections.singletonMap;
+
 /**
  * Converts a Java cipher suite string to an OpenSSL cipher suite string and vice versa.
  *
- * @see <a href="http://en.wikipedia.org/wiki/Cipher_suite">Wikipedia page about cipher suite</a>
+ * @see <a href="https://en.wikipedia.org/wiki/Cipher_suite">Wikipedia page about cipher suite</a>
  */
-final class CipherSuiteConverter {
+@UnstableApi
+public final class CipherSuiteConverter {
 
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(CipherSuiteConverter.class);
 
@@ -69,7 +74,7 @@ final class CipherSuiteConverter {
                     "^(?:(" + // BEGIN handshake algorithm
                         "(?:(?:EXP-)?" +
                             "(?:" +
-                                "(?:DHE|EDH|ECDH|ECDHE|SRP)-(?:DSS|RSA|ECDSA)|" +
+                                "(?:DHE|EDH|ECDH|ECDHE|SRP|RSA)-(?:DSS|RSA|ECDSA|PSK)|" +
                                 "(?:ADH|AECDH|KRB5|PSK|SRP)" +
                             ')' +
                         ")|" +
@@ -83,10 +88,27 @@ final class CipherSuiteConverter {
     private static final Pattern OPENSSL_AES_PATTERN = Pattern.compile("^(AES)([0-9]+)-(.*)$");
 
     /**
+     * Used to store nullable values in a CHM
+     */
+    private static final class CachedValue {
+
+        private static final CachedValue NULL = new CachedValue(null);
+
+        static CachedValue of(String value) {
+            return value != null ? new CachedValue(value) : NULL;
+        }
+
+        final String value;
+        private CachedValue(String value) {
+            this.value = value;
+        }
+    }
+
+    /**
      * Java-to-OpenSSL cipher suite conversion map
      * Note that the Java cipher suite has the protocol prefix (TLS_, SSL_)
      */
-    private static final ConcurrentMap<String, String> j2o = PlatformDependent.newConcurrentHashMap();
+    private static final ConcurrentMap<String, CachedValue> j2o = PlatformDependent.newConcurrentHashMap();
 
     /**
      * OpenSSL-to-Java cipher suite conversion map.
@@ -94,6 +116,26 @@ final class CipherSuiteConverter {
      * a Java cipher suite has the protocol name prefix (TLS_, SSL_)
      */
     private static final ConcurrentMap<String, Map<String, String>> o2j = PlatformDependent.newConcurrentHashMap();
+
+    private static final Map<String, String> j2oTls13;
+    private static final Map<String, Map<String, String>> o2jTls13;
+
+    static {
+        Map<String, String> j2oTls13Map = new HashMap<String, String>();
+        j2oTls13Map.put("TLS_AES_128_GCM_SHA256", "AEAD-AES128-GCM-SHA256");
+        j2oTls13Map.put("TLS_AES_256_GCM_SHA384", "AEAD-AES256-GCM-SHA384");
+        j2oTls13Map.put("TLS_CHACHA20_POLY1305_SHA256", "AEAD-CHACHA20-POLY1305-SHA256");
+        j2oTls13 = Collections.unmodifiableMap(j2oTls13Map);
+
+        Map<String, Map<String, String>> o2jTls13Map = new HashMap<String, Map<String, String>>();
+        o2jTls13Map.put("TLS_AES_128_GCM_SHA256", singletonMap("TLS", "TLS_AES_128_GCM_SHA256"));
+        o2jTls13Map.put("TLS_AES_256_GCM_SHA384", singletonMap("TLS", "TLS_AES_256_GCM_SHA384"));
+        o2jTls13Map.put("TLS_CHACHA20_POLY1305_SHA256", singletonMap("TLS", "TLS_CHACHA20_POLY1305_SHA256"));
+        o2jTls13Map.put("AEAD-AES128-GCM-SHA256", singletonMap("TLS", "TLS_AES_128_GCM_SHA256"));
+        o2jTls13Map.put("AEAD-AES256-GCM-SHA384", singletonMap("TLS", "TLS_AES_256_GCM_SHA384"));
+        o2jTls13Map.put("AEAD-CHACHA20-POLY1305-SHA256", singletonMap("TLS", "TLS_CHACHA20_POLY1305_SHA256"));
+        o2jTls13 = Collections.unmodifiableMap(o2jTls13Map);
+    }
 
     /**
      * Clears the cache for testing purpose.
@@ -107,7 +149,8 @@ final class CipherSuiteConverter {
      * Tests if the specified key-value pair has been cached in Java-to-OpenSSL cache.
      */
     static boolean isJ2OCached(String key, String value) {
-        return value.equals(j2o.get(key));
+        CachedValue cached = j2o.get(key);
+        return cached != null && value.equals(cached.value);
     }
 
     /**
@@ -123,54 +166,32 @@ final class CipherSuiteConverter {
     }
 
     /**
-     * Converts the specified Java cipher suites to the colon-separated OpenSSL cipher suite specification.
-     */
-    static String toOpenSsl(Iterable<String> javaCipherSuites) {
-        final StringBuilder buf = new StringBuilder();
-        for (String c: javaCipherSuites) {
-            if (c == null) {
-                break;
-            }
-
-            String converted = toOpenSsl(c);
-            if (converted != null) {
-                c = converted;
-            }
-
-            buf.append(c);
-            buf.append(':');
-        }
-
-        if (buf.length() > 0) {
-            buf.setLength(buf.length() - 1);
-            return buf.toString();
-        } else {
-            return "";
-        }
-    }
-
-    /**
      * Converts the specified Java cipher suite to its corresponding OpenSSL cipher suite name.
      *
      * @return {@code null} if the conversion has failed
      */
-    static String toOpenSsl(String javaCipherSuite) {
-        String converted = j2o.get(javaCipherSuite);
+    public static String toOpenSsl(String javaCipherSuite, boolean boringSSL) {
+        CachedValue converted = j2o.get(javaCipherSuite);
         if (converted != null) {
-            return converted;
-        } else {
-            return cacheFromJava(javaCipherSuite);
+            return converted.value;
         }
+        return cacheFromJava(javaCipherSuite, boringSSL);
     }
 
-    private static String cacheFromJava(String javaCipherSuite) {
-        String openSslCipherSuite = toOpenSslUncached(javaCipherSuite);
+    private static String cacheFromJava(String javaCipherSuite, boolean boringSSL) {
+        String converted = j2oTls13.get(javaCipherSuite);
+        if (converted != null) {
+            return boringSSL ? converted : javaCipherSuite;
+        }
+
+        String openSslCipherSuite = toOpenSslUncached(javaCipherSuite, boringSSL);
+
+        // Cache the mapping.
+        j2o.putIfAbsent(javaCipherSuite, CachedValue.of(openSslCipherSuite));
+
         if (openSslCipherSuite == null) {
             return null;
         }
-
-        // Cache the mapping.
-        j2o.putIfAbsent(javaCipherSuite, openSslCipherSuite);
 
         // Cache the reverse mapping after stripping the protocol prefix (TLS_ or SSL_)
         final String javaCipherSuiteSuffix = javaCipherSuite.substring(4);
@@ -185,7 +206,12 @@ final class CipherSuiteConverter {
         return openSslCipherSuite;
     }
 
-    static String toOpenSslUncached(String javaCipherSuite) {
+    static String toOpenSslUncached(String javaCipherSuite, boolean boringSSL) {
+        String converted = j2oTls13.get(javaCipherSuite);
+        if (converted != null) {
+            return boringSSL ? converted : javaCipherSuite;
+        }
+
         Matcher m = JAVA_CIPHERSUITE_PATTERN.matcher(javaCipherSuite);
         if (!m.matches()) {
             return null;
@@ -196,6 +222,8 @@ final class CipherSuiteConverter {
         String hmacAlgo = toOpenSslHmacAlgo(m.group(3));
         if (handshakeAlgo.isEmpty()) {
             return bulkCipher + '-' + hmacAlgo;
+        } else if (bulkCipher.contains("CHACHA20")) {
+            return handshakeAlgo + '-' + bulkCipher;
         } else {
             return handshakeAlgo + '-' + bulkCipher + '-' + hmacAlgo;
         }
@@ -270,9 +298,9 @@ final class CipherSuiteConverter {
      * Convert from OpenSSL cipher suite name convention to java cipher suite name convention.
      * @param openSslCipherSuite An OpenSSL cipher suite name.
      * @param protocol The cryptographic protocol (i.e. SSL, TLS, ...).
-     * @return The translated cipher suite name according to java conventions. This will not be {@code null}.
+     * @return The translated cipher suite name according to java conventions (or null if translation was not possible).
      */
-    static String toJava(String openSslCipherSuite, String protocol) {
+    public static String toJava(String openSslCipherSuite, String protocol) {
         Map<String, String> p2j = o2j.get(openSslCipherSuite);
         if (p2j == null) {
             p2j = cacheFromOpenSsl(openSslCipherSuite);
@@ -285,14 +313,23 @@ final class CipherSuiteConverter {
 
         String javaCipherSuite = p2j.get(protocol);
         if (javaCipherSuite == null) {
-            javaCipherSuite = protocol + '_' + p2j.get("");
+            String cipher = p2j.get("");
+            if (cipher == null) {
+                return null;
+            }
+            javaCipherSuite = protocol + '_' + cipher;
         }
 
         return javaCipherSuite;
     }
 
     private static Map<String, String> cacheFromOpenSsl(String openSslCipherSuite) {
-        String javaCipherSuiteSuffix = toJavaUncached(openSslCipherSuite);
+        Map<String, String> converted = o2jTls13.get(openSslCipherSuite);
+        if (converted != null) {
+            return converted;
+        }
+
+        String javaCipherSuiteSuffix = toJavaUncached0(openSslCipherSuite, false);
         if (javaCipherSuiteSuffix == null) {
             return null;
         }
@@ -308,8 +345,9 @@ final class CipherSuiteConverter {
         o2j.putIfAbsent(openSslCipherSuite, p2j);
 
         // Cache the reverse mapping after adding the protocol prefix (TLS_ or SSL_)
-        j2o.putIfAbsent(javaCipherSuiteTls, openSslCipherSuite);
-        j2o.putIfAbsent(javaCipherSuiteSsl, openSslCipherSuite);
+        CachedValue cachedValue = CachedValue.of(openSslCipherSuite);
+        j2o.putIfAbsent(javaCipherSuiteTls, cachedValue);
+        j2o.putIfAbsent(javaCipherSuiteSsl, cachedValue);
 
         logger.debug("Cipher suite mapping: {} => {}", javaCipherSuiteTls, openSslCipherSuite);
         logger.debug("Cipher suite mapping: {} => {}", javaCipherSuiteSsl, openSslCipherSuite);
@@ -318,6 +356,17 @@ final class CipherSuiteConverter {
     }
 
     static String toJavaUncached(String openSslCipherSuite) {
+        return toJavaUncached0(openSslCipherSuite, true);
+    }
+
+    private static String toJavaUncached0(String openSslCipherSuite, boolean checkTls13) {
+        if (checkTls13) {
+            Map<String, String> converted = o2jTls13.get(openSslCipherSuite);
+            if (converted != null) {
+                return converted.get("TLS");
+            }
+        }
+
         Matcher m = OPENSSL_CIPHERSUITE_PATTERN.matcher(openSslCipherSuite);
         if (!m.matches()) {
             return null;
@@ -342,7 +391,12 @@ final class CipherSuiteConverter {
         String bulkCipher = toJavaBulkCipher(m.group(2), export);
         String hmacAlgo = toJavaHmacAlgo(m.group(3));
 
-        return handshakeAlgo + "_WITH_" + bulkCipher + '_' + hmacAlgo;
+        String javaCipherSuite = handshakeAlgo + "_WITH_" + bulkCipher + '_' + hmacAlgo;
+        // For historical reasons the CHACHA20 ciphers do not follow OpenSSL's custom naming convention and omits the
+        // HMAC algorithm portion of the name. There is currently no way to derive this information because it is
+        // omitted from the OpenSSL cipher name, but they currently all use SHA256 for HMAC [1].
+        // [1] https://www.openssl.org/docs/man1.1.0/apps/ciphers.html
+        return bulkCipher.contains("CHACHA20") ? javaCipherSuite + "_SHA256" : javaCipherSuite;
     }
 
     private static String toJavaHandshakeAlgo(String handshakeAlgo, boolean export) {
@@ -414,6 +468,48 @@ final class CipherSuiteConverter {
         //   * MD5
         //
         return hmacAlgo;
+    }
+
+    /**
+     * Convert the given ciphers if needed to OpenSSL format and append them to the correct {@link StringBuilder}
+     * depending on if its a TLSv1.3 cipher or not. If this methods returns without throwing an exception its
+     * guaranteed that at least one of the {@link StringBuilder}s contain some ciphers that can be used to configure
+     * OpenSSL.
+     */
+    static void convertToCipherStrings(Iterable<String> cipherSuites, StringBuilder cipherBuilder,
+                                       StringBuilder cipherTLSv13Builder, boolean boringSSL) {
+        for (String c: cipherSuites) {
+            if (c == null) {
+                break;
+            }
+
+            String converted = toOpenSsl(c, boringSSL);
+            if (converted == null) {
+                converted = c;
+            }
+
+            if (!OpenSsl.isCipherSuiteAvailable(converted)) {
+                throw new IllegalArgumentException("unsupported cipher suite: " + c + '(' + converted + ')');
+            }
+
+            if (SslUtils.isTLSv13Cipher(converted) || SslUtils.isTLSv13Cipher(c)) {
+                cipherTLSv13Builder.append(converted);
+                cipherTLSv13Builder.append(':');
+            } else {
+                cipherBuilder.append(converted);
+                cipherBuilder.append(':');
+            }
+        }
+
+        if (cipherBuilder.length() == 0 && cipherTLSv13Builder.length() == 0) {
+            throw new IllegalArgumentException("empty cipher suites");
+        }
+        if (cipherBuilder.length() > 0) {
+            cipherBuilder.setLength(cipherBuilder.length() - 1);
+        }
+        if (cipherTLSv13Builder.length() > 0) {
+            cipherTLSv13Builder.setLength(cipherTLSv13Builder.length() - 1);
+        }
     }
 
     private CipherSuiteConverter() { }

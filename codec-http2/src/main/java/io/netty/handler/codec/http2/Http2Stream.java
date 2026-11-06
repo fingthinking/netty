@@ -5,7 +5,7 @@
  * "License"); you may not use this file except in compliance with the License. You may obtain a
  * copy of the License at:
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software distributed under the License
  * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
@@ -15,12 +15,9 @@
 
 package io.netty.handler.codec.http2;
 
-import io.netty.util.internal.UnstableApi;
-
 /**
  * A single stream within an HTTP2 connection. Streams are compared to each other by priority.
  */
-@UnstableApi
 public interface Http2Stream {
 
     /**
@@ -76,9 +73,9 @@ public interface Http2Stream {
      * <ul>
      * <li>{@link State#OPEN} if {@link #state()} is {@link State#IDLE} and {@code halfClosed} is {@code false}.</li>
      * <li>{@link State#HALF_CLOSED_LOCAL} if {@link #state()} is {@link State#IDLE} and {@code halfClosed}
-     * is {@code true} and the stream is local.</li>
+     * is {@code true} and the stream is local. In this state, {@link #isHeadersSent()} is {@code true}</li>
      * <li>{@link State#HALF_CLOSED_REMOTE} if {@link #state()} is {@link State#IDLE} and {@code halfClosed}
-     * is {@code true} and the stream is remote.</li>
+     * is {@code true} and the stream is remote. In this state, {@link #isHeadersReceived()} is {@code true}</li>
      * <li>{@link State#RESERVED_LOCAL} if {@link #state()} is {@link State#HALF_CLOSED_REMOTE}.</li>
      * <li>{@link State#RESERVED_REMOTE} if {@link #state()} is {@link State#HALF_CLOSED_LOCAL}.</li>
      * </ul>
@@ -130,14 +127,40 @@ public interface Http2Stream {
     <V> V removeProperty(Http2Connection.PropertyKey key);
 
     /**
-     * Indicates that headers has been sent to the remote on this stream.
+     * Indicates that headers have been sent to the remote endpoint on this stream. The first call to this method would
+     * be for the initial headers (see {@link #isHeadersSent()}} and the second call would indicate the trailers
+     * (see {@link #isTrailersReceived()}).
+     * @param isInformational {@code true} if the headers contain an informational status code (for responses only).
      */
-    Http2Stream headersSent();
+    Http2Stream headersSent(boolean isInformational);
 
     /**
-     * Indicates whether or not headers was sent to the remote endpoint.
+     * Indicates whether or not headers were sent to the remote endpoint.
      */
     boolean isHeadersSent();
+
+    /**
+     * Indicates whether or not trailers were sent to the remote endpoint.
+     */
+    boolean isTrailersSent();
+
+    /**
+     * Indicates that headers have been received. The first call to this method would be for the initial headers
+     * (see {@link #isHeadersReceived()}} and the second call would indicate the trailers
+     * (see {@link #isTrailersReceived()}).
+     * @param isInformational {@code true} if the headers contain an informational status code (for responses only).
+     */
+    Http2Stream headersReceived(boolean isInformational);
+
+    /**
+     * Indicates whether or not the initial headers have been received.
+     */
+    boolean isHeadersReceived();
+
+    /**
+     * Indicates whether or not the trailers have been received.
+     */
+    boolean isTrailersReceived();
 
     /**
      * Indicates that a push promise was sent to the remote endpoint.

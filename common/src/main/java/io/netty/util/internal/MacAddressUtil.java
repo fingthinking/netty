@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -51,23 +51,15 @@ public final class MacAddressUtil {
 
         // Retrieve the list of available network interfaces.
         Map<NetworkInterface, InetAddress> ifaces = new LinkedHashMap<NetworkInterface, InetAddress>();
-        try {
-            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
-            if (interfaces != null) {
-                while (interfaces.hasMoreElements()) {
-                    NetworkInterface iface = interfaces.nextElement();
-                    // Use the interface with proper INET addresses only.
-                    Enumeration<InetAddress> addrs = SocketUtils.addressesFromNetworkInterface(iface);
-                    if (addrs.hasMoreElements()) {
-                        InetAddress a = addrs.nextElement();
-                        if (!a.isLoopbackAddress()) {
-                            ifaces.put(iface, a);
-                        }
-                    }
+        for (NetworkInterface iface: NetUtil.NETWORK_INTERFACES) {
+            // Use the interface with proper INET addresses only.
+            Enumeration<InetAddress> addrs = SocketUtils.addressesFromNetworkInterface(iface);
+            if (addrs.hasMoreElements()) {
+                InetAddress a = addrs.nextElement();
+                if (!a.isLoopbackAddress()) {
+                    ifaces.put(iface, a);
                 }
             }
-        } catch (SocketException e) {
-            logger.warn("Failed to retrieve the list of available network interfaces", e);
         }
 
         for (Entry<NetworkInterface, InetAddress> entry: ifaces.entrySet()) {
@@ -114,17 +106,16 @@ public final class MacAddressUtil {
             return null;
         }
 
-        switch (bestMacAddr.length) {
-            case EUI48_MAC_ADDRESS_LENGTH: // EUI-48 - convert to EUI-64
-                byte[] newAddr = new byte[EUI64_MAC_ADDRESS_LENGTH];
-                System.arraycopy(bestMacAddr, 0, newAddr, 0, 3);
-                newAddr[3] = (byte) 0xFF;
-                newAddr[4] = (byte) 0xFE;
-                System.arraycopy(bestMacAddr, 3, newAddr, 5, 3);
-                bestMacAddr = newAddr;
-                break;
-            default: // Unknown
-                bestMacAddr = Arrays.copyOf(bestMacAddr, EUI64_MAC_ADDRESS_LENGTH);
+        if (bestMacAddr.length == EUI48_MAC_ADDRESS_LENGTH) { // EUI-48 - convert to EUI-64
+            byte[] newAddr = new byte[EUI64_MAC_ADDRESS_LENGTH];
+            System.arraycopy(bestMacAddr, 0, newAddr, 0, 3);
+            newAddr[3] = (byte) 0xFF;
+            newAddr[4] = (byte) 0xFE;
+            System.arraycopy(bestMacAddr, 3, newAddr, 5, 3);
+            bestMacAddr = newAddr;
+        } else {
+            // Unknown
+            bestMacAddr = Arrays.copyOf(bestMacAddr, EUI64_MAC_ADDRESS_LENGTH);
         }
 
         return bestMacAddr;
@@ -135,13 +126,13 @@ public final class MacAddressUtil {
      * address.
      */
     public static byte[] defaultMachineId() {
-        byte[] bestMacAddr = MacAddressUtil.bestAvailableMac();
+        byte[] bestMacAddr = bestAvailableMac();
         if (bestMacAddr == null) {
             bestMacAddr = new byte[EUI64_MAC_ADDRESS_LENGTH];
             PlatformDependent.threadLocalRandom().nextBytes(bestMacAddr);
             logger.warn(
                     "Failed to find a usable hardware address from the network interfaces; using random bytes: {}",
-                    MacAddressUtil.formatAddress(bestMacAddr));
+                    formatAddress(bestMacAddr));
         }
         return bestMacAddr;
     }
@@ -173,14 +164,14 @@ public final class MacAddressUtil {
         int j = 0;
         for (int i = 0; i < end; ++i, j += 3) {
             final int sIndex = j + 2;
-            machineId[i] = (byte) Integer.parseInt(value.substring(j, sIndex), 16);
+            machineId[i] = StringUtil.decodeHexByte(value, j);
             if (value.charAt(sIndex) != separator) {
                 throw new IllegalArgumentException("expected separator '" + separator + " but got '" +
                         value.charAt(sIndex) + "' at index: " + sIndex);
             }
         }
 
-        machineId[end] = (byte) Integer.parseInt(value.substring(j, value.length()), 16);
+        machineId[end] = StringUtil.decodeHexByte(value, j);
 
         return machineId;
     }
@@ -196,11 +187,18 @@ public final class MacAddressUtil {
      * @return hex formatted MAC address.
      */
     public static String formatAddress(byte[] addr) {
-        StringBuilder buf = new StringBuilder(24);
-        for (byte b: addr) {
-            buf.append(String.format("%02x:", b & 0xff));
+        if (addr.length == 0) {
+            return "";
         }
-        return buf.substring(0, buf.length() - 1);
+        // avoid String.format: it pulls java.util.Formatter and its regex machinery into the startup path
+        StringBuilder buf = new StringBuilder(addr.length * 3 - 1);
+        for (byte b: addr) {
+            if (buf.length() > 0) {
+                buf.append(':');
+            }
+            buf.append(StringUtil.byteToHexStringPadded(b));
+        }
+        return buf.toString();
     }
 
     /**

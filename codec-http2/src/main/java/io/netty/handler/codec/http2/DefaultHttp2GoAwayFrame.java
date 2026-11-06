@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,15 +15,16 @@
  */
 package io.netty.handler.codec.http2;
 
+import static io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
+
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.DefaultByteBufHolder;
 import io.netty.buffer.Unpooled;
-import io.netty.util.internal.UnstableApi;
+import io.netty.util.internal.StringUtil;
 
 /**
  * The default {@link Http2GoAwayFrame} implementation.
  */
-@UnstableApi
 public final class DefaultHttp2GoAwayFrame extends DefaultByteBufHolder implements Http2GoAwayFrame {
 
     private final long errorCode;
@@ -97,9 +98,7 @@ public final class DefaultHttp2GoAwayFrame extends DefaultByteBufHolder implemen
 
     @Override
     public Http2GoAwayFrame setExtraStreamIds(int extraStreamIds) {
-        if (extraStreamIds < 0) {
-            throw new IllegalArgumentException("extraStreamIds must be non-negative");
-        }
+        checkPositiveOrZero(extraStreamIds, "extraStreamIds");
         this.extraStreamIds = extraStreamIds;
         return this;
     }
@@ -159,22 +158,20 @@ public final class DefaultHttp2GoAwayFrame extends DefaultByteBufHolder implemen
             return false;
         }
         DefaultHttp2GoAwayFrame other = (DefaultHttp2GoAwayFrame) o;
-        return super.equals(o) && errorCode == other.errorCode && content().equals(other.content())
-            && extraStreamIds == other.extraStreamIds;
+        return errorCode == other.errorCode && extraStreamIds == other.extraStreamIds && super.equals(other);
     }
 
     @Override
     public int hashCode() {
-        int hash = 237395317;
-        hash = hash * 31 + (int) (errorCode ^ (errorCode >>> 32));
-        hash = hash * 31 + content().hashCode();
+        int hash = super.hashCode();
+        hash = hash * 31 + (int) (errorCode ^ errorCode >>> 32);
         hash = hash * 31 + extraStreamIds;
         return hash;
     }
 
     @Override
     public String toString() {
-        return "DefaultHttp2GoAwayFrame(errorCode=" + errorCode + ", content=" + content()
-               + ", extraStreamIds=" + extraStreamIds + ", lastStreamId=" + lastStreamId + ")";
+        return StringUtil.simpleClassName(this) + "(errorCode=" + errorCode + ", content=" + content()
+               + ", extraStreamIds=" + extraStreamIds + ", lastStreamId=" + lastStreamId + ')';
     }
 }

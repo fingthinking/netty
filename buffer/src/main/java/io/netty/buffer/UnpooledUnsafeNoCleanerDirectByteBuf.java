@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -21,8 +21,9 @@ import java.nio.ByteBuffer;
 
 class UnpooledUnsafeNoCleanerDirectByteBuf extends UnpooledUnsafeDirectByteBuf {
 
-    UnpooledUnsafeNoCleanerDirectByteBuf(ByteBufAllocator alloc, int initialCapacity, int maxCapacity) {
-        super(alloc, initialCapacity, maxCapacity);
+    UnpooledUnsafeNoCleanerDirectByteBuf(ByteBufAllocator alloc, int initialCapacity, int maxCapacity,
+                                         boolean allowSectionedInternalNioBufferAccess) {
+        super(alloc, initialCapacity, maxCapacity, allowSectionedInternalNioBufferAccess);
     }
 
     @Override
@@ -43,31 +44,13 @@ class UnpooledUnsafeNoCleanerDirectByteBuf extends UnpooledUnsafeDirectByteBuf {
     public ByteBuf capacity(int newCapacity) {
         checkNewCapacity(newCapacity);
 
-        int readerIndex = readerIndex();
-        int writerIndex = writerIndex();
         int oldCapacity = capacity();
-
-        if (newCapacity > oldCapacity) {
-            ByteBuffer oldBuffer = buffer;
-            ByteBuffer newBuffer = reallocateDirect(oldBuffer, newCapacity);
-            setByteBuffer(newBuffer, false);
-        } else if (newCapacity < oldCapacity) {
-            ByteBuffer oldBuffer = buffer;
-            ByteBuffer newBuffer = allocateDirect(newCapacity);
-            if (readerIndex < newCapacity) {
-                if (writerIndex > newCapacity) {
-                    writerIndex = newCapacity;
-                    writerIndex(writerIndex);
-                }
-                oldBuffer.position(readerIndex).limit(writerIndex);
-                newBuffer.position(readerIndex).limit(writerIndex);
-                newBuffer.put(oldBuffer);
-                newBuffer.clear();
-            } else {
-                setIndex(newCapacity, newCapacity);
-            }
-            setByteBuffer(newBuffer, true);
+        if (newCapacity == oldCapacity) {
+            return this;
         }
+
+        trimIndicesToCapacity(newCapacity);
+        setByteBuffer(reallocateDirect(buffer, newCapacity), false);
         return this;
     }
 }

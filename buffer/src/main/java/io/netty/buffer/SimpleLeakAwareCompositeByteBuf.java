@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -31,7 +31,7 @@ class SimpleLeakAwareCompositeByteBuf extends WrappedCompositeByteBuf {
     }
 
     @Override
-    public final boolean release() {
+    public boolean release() {
         // Call unwrap() before just in case that super.release() will change the ByteBuf instance that is returned
         // by unwrap().
         ByteBuf unwrapped = unwrap();
@@ -43,7 +43,7 @@ class SimpleLeakAwareCompositeByteBuf extends WrappedCompositeByteBuf {
     }
 
     @Override
-    public final boolean release(int decrement) {
+    public boolean release(int decrement) {
         // Call unwrap() before just in case that super.release() will change the ByteBuf instance that is returned
         // by unwrap().
         ByteBuf unwrapped = unwrap();

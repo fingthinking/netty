@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -16,18 +16,20 @@
 package io.netty.handler.ssl;
 
 import io.netty.internal.tcnative.CertificateVerifier;
-import org.junit.Assert;
-import org.junit.Assume;
-import org.junit.BeforeClass;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 
 import java.lang.reflect.Field;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
 public class OpenSslCertificateExceptionTest {
 
-    @BeforeClass
-    public static void assumeOpenSsl() {
-        Assume.assumeTrue(OpenSsl.isAvailable());
+    @BeforeAll
+    public static void ensureOpenSsl() {
+        OpenSsl.ensureAvailability();
     }
 
     @Test
@@ -37,13 +39,23 @@ public class OpenSslCertificateExceptionTest {
             if (field.isAccessible()) {
                 int errorCode = field.getInt(null);
                 OpenSslCertificateException exception = new OpenSslCertificateException(errorCode);
-                Assert.assertEquals(errorCode, exception.errorCode());
+                assertEquals(errorCode, exception.errorCode());
             }
         }
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testNonValidErrorCode() {
-        new OpenSslCertificateException(Integer.MIN_VALUE);
+        assertThrows(IllegalArgumentException.class, new Executable() {
+            @Override
+            public void execute() throws Throwable {
+                new OpenSslCertificateException(Integer.MIN_VALUE);
+            }
+        });
+    }
+
+    @Test
+    public void testCanBeInstancedWhenOpenSslIsNotAvailable() {
+        new OpenSslCertificateException(0);
     }
 }

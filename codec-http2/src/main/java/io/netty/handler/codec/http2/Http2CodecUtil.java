@@ -5,7 +5,7 @@
  * "License"); you may not use this file except in compliance with the License. You may obtain a
  * copy of the License at:
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software distributed under the License
  * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
@@ -25,7 +25,6 @@ import io.netty.channel.DefaultChannelPromise;
 import io.netty.handler.ssl.ApplicationProtocolNames;
 import io.netty.util.AsciiString;
 import io.netty.util.concurrent.EventExecutor;
-import io.netty.util.internal.UnstableApi;
 
 import static io.netty.buffer.Unpooled.directBuffer;
 import static io.netty.buffer.Unpooled.unreleasableBuffer;
@@ -35,15 +34,16 @@ import static io.netty.handler.codec.http2.Http2Exception.headerListSizeError;
 import static io.netty.util.CharsetUtil.UTF_8;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 /**
  * Constants and utility method used for encoding/decoding HTTP2 frames.
  */
-@UnstableApi
 public final class Http2CodecUtil {
     public static final int CONNECTION_STREAM_ID = 0;
     public static final int HTTP_UPGRADE_STREAM_ID = 1;
-    public static final CharSequence HTTP_UPGRADE_SETTINGS_HEADER = new AsciiString("HTTP2-Settings");
+    public static final CharSequence HTTP_UPGRADE_SETTINGS_HEADER = AsciiString.cached("HTTP2-Settings");
     public static final CharSequence HTTP_UPGRADE_PROTOCOL_NAME = "h2c";
     public static final CharSequence TLS_UPGRADE_PROTOCOL_NAME = ApplicationProtocolNames.HTTP_2;
 
@@ -65,9 +65,6 @@ public final class Http2CodecUtil {
     private static final ByteBuf CONNECTION_PREFACE =
             unreleasableBuffer(directBuffer(24).writeBytes("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".getBytes(UTF_8)))
                     .asReadOnly();
-    private static final ByteBuf EMPTY_PING =
-            unreleasableBuffer(directBuffer(PING_FRAME_PAYLOAD_LENGTH).writeZero(PING_FRAME_PAYLOAD_LENGTH))
-                    .asReadOnly();
 
     private static final int MAX_PADDING_LENGTH_LENGTH = 1;
     public static final int DATA_FRAME_HEADER_LENGTH = FRAME_HEADER_LENGTH + MAX_PADDING_LENGTH_LENGTH;
@@ -79,7 +76,7 @@ public final class Http2CodecUtil {
             FRAME_HEADER_LENGTH + MAX_PADDING_LENGTH_LENGTH + INT_FIELD_LENGTH;
     public static final int GO_AWAY_FRAME_HEADER_LENGTH = FRAME_HEADER_LENGTH + 2 * INT_FIELD_LENGTH;
     public static final int WINDOW_UPDATE_FRAME_LENGTH = FRAME_HEADER_LENGTH + INT_FIELD_LENGTH;
-    public static final int CONTINUATION_FRAME_HEADER_LENGTH = FRAME_HEADER_LENGTH + MAX_PADDING_LENGTH_LENGTH;
+    public static final int CONTINUATION_FRAME_HEADER_LENGTH = FRAME_HEADER_LENGTH;
 
     public static final char SETTINGS_HEADER_TABLE_SIZE = 1;
     public static final char SETTINGS_ENABLE_PUSH = 2;
@@ -87,7 +84,8 @@ public final class Http2CodecUtil {
     public static final char SETTINGS_INITIAL_WINDOW_SIZE = 4;
     public static final char SETTINGS_MAX_FRAME_SIZE = 5;
     public static final char SETTINGS_MAX_HEADER_LIST_SIZE = 6;
-    public static final int NUM_STANDARD_SETTINGS = 6;
+    public static final char SETTINGS_ENABLE_CONNECT_PROTOCOL = 8;
+    public static final int NUM_STANDARD_SETTINGS = 7;
 
     public static final long MAX_HEADER_TABLE_SIZE = MAX_UNSIGNED_INT;
     public static final long MAX_CONCURRENT_STREAMS = MAX_UNSIGNED_INT;
@@ -113,12 +111,19 @@ public final class Http2CodecUtil {
     public static final int DEFAULT_MAX_FRAME_SIZE = MAX_FRAME_SIZE_LOWER_BOUND;
     /**
      * The assumed minimum value for {@code SETTINGS_MAX_CONCURRENT_STREAMS} as
-     * recommended by the <a herf="https://tools.ietf.org/html/rfc7540#section-6.5.2">HTTP/2 spec</a>.
+     * recommended by the <a href="https://tools.ietf.org/html/rfc7540#section-6.5.2">HTTP/2 spec</a>.
      */
     public static final int SMALLEST_MAX_CONCURRENT_STREAMS = 100;
     static final int DEFAULT_MAX_RESERVED_STREAMS = SMALLEST_MAX_CONCURRENT_STREAMS;
     static final int DEFAULT_MIN_ALLOCATION_CHUNK = 1024;
-    static final int DEFAULT_INITIAL_HUFFMAN_DECODE_CAPACITY = 32;
+    static final int DEFAULT_MAX_SMALL_CONTINUATION_FRAME = 16;
+
+    /**
+     * While the RFC only specified a minimum we should still pick a default which is good enough that most people
+     * no need to adjust it but still be somewhat protected. Let's use the minimum
+     * defined by the <a href="https://tools.ietf.org/html/rfc7540#section-6.5.2">HTTP/2 spec</a>.
+     */
+    static final int DEFAULT_MAX_CONCURRENT_STREAMS = SMALLEST_MAX_CONCURRENT_STREAMS;
 
     /**
      * Calculate the threshold in bytes which should trigger a {@code GO_AWAY} if a set of headers exceeds this amount.
@@ -131,6 +136,10 @@ public final class Http2CodecUtil {
         // This is equivalent to `maxHeaderListSize * 1.25` but we avoid floating point multiplication.
         return maxHeaderListSize + (maxHeaderListSize >>> 2);
     }
+
+    public static final long DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_MILLIS = MILLISECONDS.convert(30, SECONDS);
+
+    public static final int DEFAULT_MAX_QUEUED_CONTROL_FRAMES = 10000;
 
     /**
      * Returns {@code true} if the stream is an outbound stream.
@@ -150,6 +159,10 @@ public final class Http2CodecUtil {
         return streamId >= 0;
     }
 
+    static boolean isStreamIdValid(int streamId, boolean server) {
+        return isStreamIdValid(streamId) && server == ((streamId & 1) == 0);
+    }
+
     /**
      * Indicates whether or not the given value for max frame size falls within the valid range.
      */
@@ -158,19 +171,11 @@ public final class Http2CodecUtil {
     }
 
     /**
-     * Returns a buffer containing the the {@link #CONNECTION_PREFACE}.
+     * Returns a buffer containing the {@link #CONNECTION_PREFACE}.
      */
     public static ByteBuf connectionPrefaceBuf() {
         // Return a duplicate so that modifications to the reader index will not affect the original buffer.
         return CONNECTION_PREFACE.retainedDuplicate();
-    }
-
-    /**
-     * Returns a buffer filled with all zeros that is the appropriate length for a PING frame.
-     */
-    public static ByteBuf emptyPingBuf() {
-        // Return a duplicate so that modifications to the reader index will not affect the original buffer.
-        return EMPTY_PING.retainedDuplicate();
     }
 
     /**
@@ -219,7 +224,7 @@ public final class Http2CodecUtil {
      * Calculate the amount of bytes that can be sent by {@code state}. The lower bound is {@code 0}.
      */
     public static int streamableBytes(StreamByteDistributor.StreamState state) {
-        return max(0, min(state.pendingBytes(), state.windowSize()));
+        return max(0, (int) min(state.pendingBytes(), state.windowSize()));
     }
 
     /**
@@ -264,7 +269,7 @@ public final class Http2CodecUtil {
         private final ChannelPromise promise;
         private int expectedCount;
         private int doneCount;
-        private Throwable lastFailure;
+        private Throwable aggregateFailure;
         private boolean doneAllocating;
 
         SimpleChannelPromiseAggregator(ChannelPromise promise, Channel c, EventExecutor e) {
@@ -303,7 +308,7 @@ public final class Http2CodecUtil {
         public boolean tryFailure(Throwable cause) {
             if (allowFailure()) {
                 ++doneCount;
-                lastFailure = cause;
+                setAggregateFailure(cause);
                 if (allPromisesDone()) {
                     return tryPromise();
                 }
@@ -324,7 +329,7 @@ public final class Http2CodecUtil {
         public ChannelPromise setFailure(Throwable cause) {
             if (allowFailure()) {
                 ++doneCount;
-                lastFailure = cause;
+                setAggregateFailure(cause);
                 if (allPromisesDone()) {
                     return setPromise();
                 }
@@ -370,22 +375,28 @@ public final class Http2CodecUtil {
         }
 
         private ChannelPromise setPromise() {
-            if (lastFailure == null) {
+            if (aggregateFailure == null) {
                 promise.setSuccess();
                 return super.setSuccess(null);
             } else {
-                promise.setFailure(lastFailure);
-                return super.setFailure(lastFailure);
+                promise.setFailure(aggregateFailure);
+                return super.setFailure(aggregateFailure);
             }
         }
 
         private boolean tryPromise() {
-            if (lastFailure == null) {
+            if (aggregateFailure == null) {
                 promise.trySuccess();
                 return super.trySuccess(null);
             } else {
-                promise.tryFailure(lastFailure);
-                return super.tryFailure(lastFailure);
+                promise.tryFailure(aggregateFailure);
+                return super.tryFailure(aggregateFailure);
+            }
+        }
+
+        private void setAggregateFailure(Throwable cause) {
+            if (aggregateFailure == null) {
+                aggregateFailure = cause;
             }
         }
     }

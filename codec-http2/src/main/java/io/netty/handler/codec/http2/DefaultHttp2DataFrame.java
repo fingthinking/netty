@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -16,9 +16,9 @@
 package io.netty.handler.codec.http2;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
-import io.netty.util.IllegalReferenceCountException;
-import io.netty.util.internal.UnstableApi;
+import io.netty.util.internal.StringUtil;
 
 import static io.netty.handler.codec.http2.Http2CodecUtil.verifyPadding;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
@@ -26,11 +26,11 @@ import static io.netty.util.internal.ObjectUtil.checkNotNull;
 /**
  * The default {@link Http2DataFrame} implementation.
  */
-@UnstableApi
 public final class DefaultHttp2DataFrame extends AbstractHttp2StreamFrame implements Http2DataFrame {
     private final ByteBuf content;
     private final boolean endStream;
     private final int padding;
+    private final int initialFlowControlledBytes;
 
     /**
      * Equivalent to {@code new DefaultHttp2DataFrame(content, false)}.
@@ -73,11 +73,15 @@ public final class DefaultHttp2DataFrame extends AbstractHttp2StreamFrame implem
         this.endStream = endStream;
         verifyPadding(padding);
         this.padding = padding;
+        if (content().readableBytes() + (long) padding > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("content + padding must be <= Integer.MAX_VALUE");
+        }
+        initialFlowControlledBytes = content().readableBytes() + padding;
     }
 
     @Override
-    public DefaultHttp2DataFrame streamId(int streamId) {
-        super.streamId(streamId);
+    public DefaultHttp2DataFrame stream(Http2FrameStream stream) {
+        super.stream(stream);
         return this;
     }
 
@@ -98,10 +102,12 @@ public final class DefaultHttp2DataFrame extends AbstractHttp2StreamFrame implem
 
     @Override
     public ByteBuf content() {
-        if (content.refCnt() <= 0) {
-            throw new IllegalReferenceCountException(content.refCnt());
-        }
-        return content;
+        return ByteBufUtil.ensureAccessible(content);
+    }
+
+    @Override
+    public int initialFlowControlledBytes() {
+        return initialFlowControlledBytes;
     }
 
     @Override
@@ -153,8 +159,8 @@ public final class DefaultHttp2DataFrame extends AbstractHttp2StreamFrame implem
 
     @Override
     public String toString() {
-        return "DefaultHttp2DataFrame(streamId=" + streamId() + ", content=" + content
-               + ", endStream=" + endStream + ", padding=" + padding + ")";
+        return StringUtil.simpleClassName(this) + "(stream=" + stream() + ", content=" + content
+               + ", endStream=" + endStream + ", padding=" + padding + ')';
     }
 
     @Override

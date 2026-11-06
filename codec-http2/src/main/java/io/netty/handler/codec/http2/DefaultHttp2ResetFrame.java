@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,15 +15,15 @@
  */
 package io.netty.handler.codec.http2;
 
-import io.netty.util.internal.UnstableApi;
+import io.netty.util.internal.StringUtil;
 
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
 
 /**
  * The default {@link Http2ResetFrame} implementation.
  */
-@UnstableApi
 public final class DefaultHttp2ResetFrame extends AbstractHttp2StreamFrame implements Http2ResetFrame {
+
     private final long errorCode;
 
     /**
@@ -32,7 +32,7 @@ public final class DefaultHttp2ResetFrame extends AbstractHttp2StreamFrame imple
      * @param error the non-{@code null} reason for reset
      */
     public DefaultHttp2ResetFrame(Http2Error error) {
-        this.errorCode = checkNotNull(error, "error").code();
+        errorCode = checkNotNull(error, "error").code();
     }
 
     /**
@@ -45,8 +45,8 @@ public final class DefaultHttp2ResetFrame extends AbstractHttp2StreamFrame imple
     }
 
     @Override
-    public DefaultHttp2ResetFrame streamId(int streamId) {
-        super.streamId(streamId);
+    public DefaultHttp2ResetFrame stream(Http2FrameStream stream) {
+        super.stream(stream);
         return this;
     }
 
@@ -62,7 +62,7 @@ public final class DefaultHttp2ResetFrame extends AbstractHttp2StreamFrame imple
 
     @Override
     public String toString() {
-        return "DefaultHttp2ResetFrame(stream=" + streamId() + "errorCode=" + errorCode + ")";
+        return StringUtil.simpleClassName(this) + "(stream=" + stream() + ", errorCode=" + errorCode + ')';
     }
 
     @Override
@@ -77,7 +77,7 @@ public final class DefaultHttp2ResetFrame extends AbstractHttp2StreamFrame imple
     @Override
     public int hashCode() {
         int hash = super.hashCode();
-        hash = hash * 31 + (int) (errorCode ^ (errorCode >>> 32));
+        hash = hash * 31 + (int) (errorCode ^ errorCode >>> 32);
         return hash;
     }
 }

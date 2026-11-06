@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -16,14 +16,14 @@
 package io.netty.testsuite.util;
 
 import io.netty.util.CharsetUtil;
-import io.netty.util.NetUtil;
+import io.netty.util.internal.ObjectUtil;
+import io.netty.util.internal.SuppressJava6Requirement;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import org.junit.rules.TestName;
+import org.junit.jupiter.api.TestInfo;
 import org.tukaani.xz.LZMA2Options;
 import org.tukaani.xz.XZOutputStream;
 
-import javax.management.MBeanServer;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -34,29 +34,17 @@ import java.io.OutputStream;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
 import java.lang.reflect.Method;
-import java.net.DatagramSocket;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.nio.channels.Channel;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Date;
-import java.util.Iterator;
-import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
+import javax.management.MBeanServer;
 
 public final class TestUtils {
 
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(TestUtils.class);
-
-    private static final int START_PORT = 32768;
-    private static final int END_PORT = 65536;
-    private static final int NUM_CANDIDATES = END_PORT - START_PORT;
-
-    private static final List<Integer> PORTS = new ArrayList<Integer>();
-    private static Iterator<Integer> portIterator;
 
     private static final Method hotspotMXBeanDumpHeap;
     private static final Object hotspotMXBean;
@@ -64,12 +52,6 @@ public final class TestUtils {
     private static final long DUMP_PROGRESS_LOGGING_INTERVAL = TimeUnit.SECONDS.toNanos(5);
 
     static {
-        // Populate the list of random ports.
-        for (int i = START_PORT; i < END_PORT; i ++) {
-            PORTS.add(i);
-        }
-        Collections.shuffle(PORTS);
-
         // Retrieve the hotspot MXBean and its class if available.
         Object mxBean;
         Method mxBeanDumpHeap;
@@ -89,85 +71,11 @@ public final class TestUtils {
     }
 
     /**
-     * Return a free port which can be used to bind to
-     *
-     * @return port
-     */
-    public static int getFreePort() {
-        for (int i = 0; i < NUM_CANDIDATES; i ++) {
-            final int port = nextCandidatePort();
-            final InetSocketAddress wildcardAddr = new InetSocketAddress(port);
-            final InetSocketAddress loopbackAddr = new InetSocketAddress(NetUtil.LOCALHOST4, port);
-
-            // Ensure it is possible to bind on wildcard/loopback and tcp/udp.
-            if (isTcpPortAvailable(wildcardAddr) &&
-                isTcpPortAvailable(loopbackAddr) &&
-                isUdpPortAvailable(wildcardAddr) &&
-                isUdpPortAvailable(loopbackAddr)) {
-                return port;
-            }
-        }
-
-        throw new RuntimeException("unable to find a free port");
-    }
-
-    private static int nextCandidatePort() {
-        if (portIterator == null || !portIterator.hasNext()) {
-            portIterator = PORTS.iterator();
-        }
-        return portIterator.next();
-    }
-
-    private static boolean isTcpPortAvailable(InetSocketAddress localAddress) {
-        ServerSocket ss = null;
-        try {
-            ss = new ServerSocket();
-            ss.setReuseAddress(false);
-            ss.bind(localAddress);
-            ss.close();
-            ss = null;
-            return true;
-        } catch (Exception ignore) {
-            // Unavailable
-        } finally {
-            if (ss != null) {
-                try {
-                    ss.close();
-                } catch (IOException ignore) {
-                    // Ignore
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private static boolean isUdpPortAvailable(InetSocketAddress localAddress) {
-        DatagramSocket ds = null;
-        try {
-            ds = new DatagramSocket(null);
-            ds.setReuseAddress(false);
-            ds.bind(localAddress);
-            ds.close();
-            ds = null;
-            return true;
-        } catch (Exception ignore) {
-            // Unavailable
-        } finally {
-            if (ds != null) {
-                ds.close();
-            }
-        }
-
-        return false;
-    }
-
-    /**
      * Return {@code true} if SCTP is supported by the running os.
      *
      */
     public static boolean isSctpSupported() {
-        String os = System.getProperty("os.name").toLowerCase(Locale.UK);
+        String os = System.getProperty("os.name").toLowerCase(Locale.US);
         if ("unix".equals(os) || "linux".equals(os) || "sun".equals(os) || "solaris".equals(os)) {
             try {
                 // Try to open a SCTP Channel, by using reflection to make it compile also on
@@ -197,8 +105,14 @@ public final class TestUtils {
     /**
      * Returns the method name of the current test.
      */
-    public static String testMethodName(TestName testName) {
-        String testMethodName = testName.getMethodName();
+    @SuppressJava6Requirement(reason = "Test only")
+    public static String testMethodName(TestInfo testInfo) {
+        String testMethodName = testInfo.getTestMethod().map(new Function<Method, String>() {
+            @Override
+            public String apply(Method method) {
+                return method.getName();
+            }
+        }).orElse("[unknown method]");
         if (testMethodName.contains("[")) {
             testMethodName = testMethodName.substring(0, testMethodName.indexOf('['));
         }
@@ -207,9 +121,7 @@ public final class TestUtils {
 
     public static void dump(String filenamePrefix) throws IOException {
 
-        if (filenamePrefix == null) {
-            throw new NullPointerException("filenamePrefix");
-        }
+        ObjectUtil.checkNotNull(filenamePrefix, "filenamePrefix");
 
         final String timestamp = timestamp();
         final File heapDumpFile = new File(filenamePrefix + '.' + timestamp + ".hprof");
@@ -237,6 +149,10 @@ public final class TestUtils {
                 return name.endsWith(".hprof");
             }
         });
+        if (files == null) {
+            logger.warn("failed to find heap dump due to I/O error!");
+            return;
+        }
 
         final byte[] buf = new byte[65536];
         final LZMA2Options options = new LZMA2Options(LZMA2Options.PRESET_DEFAULT);

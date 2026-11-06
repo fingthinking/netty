@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -14,6 +14,8 @@
  * under the License.
  */
 package io.netty.handler.ssl;
+
+import io.netty.util.internal.SuppressJava6Requirement;
 
 import java.nio.ByteBuffer;
 
@@ -24,18 +26,26 @@ import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSession;
 
-class JdkSslEngine extends SSLEngine {
+class JdkSslEngine extends SSLEngine implements ApplicationProtocolAccessor {
     private final SSLEngine engine;
-    private final JdkSslSession session;
+    private volatile String applicationProtocol;
 
     JdkSslEngine(SSLEngine engine) {
         this.engine = engine;
-        session = new JdkSslSession(engine);
     }
 
     @Override
-    public JdkSslSession getSession() {
-        return session;
+    public String getNegotiatedApplicationProtocol() {
+        return applicationProtocol;
+    }
+
+    void setNegotiatedApplicationProtocol(String applicationProtocol) {
+        this.applicationProtocol = applicationProtocol;
+    }
+
+    @Override
+    public SSLSession getSession() {
+        return engine.getSession();
     }
 
     public SSLEngine getWrappedEngine() {
@@ -137,6 +147,7 @@ class JdkSslEngine extends SSLEngine {
         engine.setEnabledProtocols(strings);
     }
 
+    @SuppressJava6Requirement(reason = "Can only be called when running on JDK7+")
     @Override
     public SSLSession getHandshakeSession() {
         return engine.getHandshakeSession();

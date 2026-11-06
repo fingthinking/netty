@@ -5,7 +5,7 @@
 * version 2.0 (the "License"); you may not use this file except in compliance
 * with the License. You may obtain a copy of the License at:
 *
-*   http://www.apache.org/licenses/LICENSE-2.0
+*   https://www.apache.org/licenses/LICENSE-2.0
 *
 * Unless required by applicable law or agreed to in writing, software
 * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -16,42 +16,58 @@
 package io.netty.util.concurrent;
 
 import io.netty.util.internal.InternalThreadLocalMap;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 
 /**
  * A special {@link Thread} that provides fast access to {@link FastThreadLocal} variables.
  */
 public class FastThreadLocalThread extends Thread {
 
+    private static final InternalLogger logger = InternalLoggerFactory.getInstance(FastThreadLocalThread.class);
+
+    // This will be set to true if we have a chance to wrap the Runnable.
+    private final boolean cleanupFastThreadLocals;
+
     private InternalThreadLocalMap threadLocalMap;
 
-    public FastThreadLocalThread() { }
+    public FastThreadLocalThread() {
+        cleanupFastThreadLocals = false;
+    }
 
     public FastThreadLocalThread(Runnable target) {
-        super(target);
+        super(FastThreadLocalRunnable.wrap(target));
+        cleanupFastThreadLocals = true;
     }
 
     public FastThreadLocalThread(ThreadGroup group, Runnable target) {
-        super(group, target);
+        super(group, FastThreadLocalRunnable.wrap(target));
+        cleanupFastThreadLocals = true;
     }
 
     public FastThreadLocalThread(String name) {
         super(name);
+        cleanupFastThreadLocals = false;
     }
 
     public FastThreadLocalThread(ThreadGroup group, String name) {
         super(group, name);
+        cleanupFastThreadLocals = false;
     }
 
     public FastThreadLocalThread(Runnable target, String name) {
-        super(target, name);
+        super(FastThreadLocalRunnable.wrap(target), name);
+        cleanupFastThreadLocals = true;
     }
 
     public FastThreadLocalThread(ThreadGroup group, Runnable target, String name) {
-        super(group, target, name);
+        super(group, FastThreadLocalRunnable.wrap(target), name);
+        cleanupFastThreadLocals = true;
     }
 
     public FastThreadLocalThread(ThreadGroup group, Runnable target, String name, long stackSize) {
-        super(group, target, name, stackSize);
+        super(group, FastThreadLocalRunnable.wrap(target), name, stackSize);
+        cleanupFastThreadLocals = true;
     }
 
     /**
@@ -59,6 +75,10 @@ public class FastThreadLocalThread extends Thread {
      * Note that this method is for internal use only, and thus is subject to change at any time.
      */
     public final InternalThreadLocalMap threadLocalMap() {
+        if (this != Thread.currentThread() && logger.isWarnEnabled()) {
+            logger.warn(new RuntimeException("It's not thread-safe to get 'threadLocalMap' " +
+                    "which doesn't belong to the caller thread"));
+        }
         return threadLocalMap;
     }
 
@@ -67,6 +87,39 @@ public class FastThreadLocalThread extends Thread {
      * Note that this method is for internal use only, and thus is subject to change at any time.
      */
     public final void setThreadLocalMap(InternalThreadLocalMap threadLocalMap) {
+        if (this != Thread.currentThread() && logger.isWarnEnabled()) {
+            logger.warn(new RuntimeException("It's not thread-safe to set 'threadLocalMap' " +
+                    "which doesn't belong to the caller thread"));
+        }
         this.threadLocalMap = threadLocalMap;
+    }
+
+    /**
+     * Returns {@code true} if {@link FastThreadLocal#removeAll()} will be called once {@link #run()} completes.
+     */
+    public boolean willCleanupFastThreadLocals() {
+        return cleanupFastThreadLocals;
+    }
+
+    /**
+     * Returns {@code true} if {@link FastThreadLocal#removeAll()} will be called once {@link Thread#run()} completes.
+     */
+    public static boolean willCleanupFastThreadLocals(Thread thread) {
+        return thread instanceof FastThreadLocalThread &&
+                ((FastThreadLocalThread) thread).willCleanupFastThreadLocals();
+    }
+
+    /**
+     * Query whether this thread is allowed to perform blocking calls or not.
+     * {@link FastThreadLocalThread}s are often used in event-loops, where blocking calls are forbidden in order to
+     * prevent event-loop stalls, so this method returns {@code false} by default.
+     * <p>
+     * Subclasses of {@link FastThreadLocalThread} can override this method if they are not meant to be used for
+     * running event-loops.
+     *
+     * @return {@code false}, unless overridden by a subclass.
+     */
+    public boolean permitBlockingCalls() {
+        return false;
     }
 }

@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -19,31 +19,40 @@ package io.netty.handler.codec.compression;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.ChannelPromise;
-import io.netty.channel.ChannelPromiseNotifier;
 import io.netty.handler.codec.EncoderException;
 import io.netty.handler.codec.MessageToByteEncoder;
 import io.netty.util.concurrent.EventExecutor;
+import io.netty.util.concurrent.PromiseNotifier;
 import io.netty.util.internal.ObjectUtil;
 import net.jpountz.lz4.LZ4Compressor;
 import net.jpountz.lz4.LZ4Exception;
 import net.jpountz.lz4.LZ4Factory;
-import net.jpountz.xxhash.XXHashFactory;
 
 import java.nio.ByteBuffer;
-import java.util.concurrent.TimeUnit;
 import java.util.zip.Checksum;
 
-import static io.netty.handler.codec.compression.Lz4Constants.*;
+import static io.netty.handler.codec.compression.Lz4Constants.BLOCK_TYPE_COMPRESSED;
+import static io.netty.handler.codec.compression.Lz4Constants.BLOCK_TYPE_NON_COMPRESSED;
+import static io.netty.handler.codec.compression.Lz4Constants.CHECKSUM_OFFSET;
+import static io.netty.handler.codec.compression.Lz4Constants.COMPRESSED_LENGTH_OFFSET;
+import static io.netty.handler.codec.compression.Lz4Constants.COMPRESSION_LEVEL_BASE;
+import static io.netty.handler.codec.compression.Lz4Constants.DECOMPRESSED_LENGTH_OFFSET;
+import static io.netty.handler.codec.compression.Lz4Constants.DEFAULT_BLOCK_SIZE;
+import static io.netty.handler.codec.compression.Lz4Constants.DEFAULT_SEED;
+import static io.netty.handler.codec.compression.Lz4Constants.HEADER_LENGTH;
+import static io.netty.handler.codec.compression.Lz4Constants.MAGIC_NUMBER;
+import static io.netty.handler.codec.compression.Lz4Constants.MAX_BLOCK_SIZE;
+import static io.netty.handler.codec.compression.Lz4Constants.MIN_BLOCK_SIZE;
+import static io.netty.handler.codec.compression.Lz4Constants.TOKEN_OFFSET;
 
 /**
  * Compresses a {@link ByteBuf} using the LZ4 format.
  *
  * See original <a href="https://github.com/Cyan4973/lz4">LZ4 Github project</a>
- * and <a href="http://fastcompression.blogspot.ru/2011/05/lz4-explained.html">LZ4 block format</a>
+ * and <a href="https://fastcompression.blogspot.ru/2011/05/lz4-explained.html">LZ4 block format</a>
  * for full description.
  *
  * Since the original LZ4 block format does not contains size of compressed block and size of original data
@@ -63,12 +72,12 @@ public class Lz4FrameEncoder extends MessageToByteEncoder<ByteBuf> {
     /**
      * Underlying compressor in use.
      */
-    private LZ4Compressor compressor;
+    private final LZ4Compressor compressor;
 
     /**
      * Underlying checksum calculator in use.
      */
-    private ByteBufChecksum checksum;
+    private final ByteBufChecksum checksum;
 
     /**
      * Compression level of current LZ4 encoder (depends on {@link #blockSize}).
@@ -113,8 +122,7 @@ public class Lz4FrameEncoder extends MessageToByteEncoder<ByteBuf> {
      *                        and is slower but compresses more efficiently
      */
     public Lz4FrameEncoder(boolean highCompressor) {
-        this(LZ4Factory.fastestInstance(), highCompressor, DEFAULT_BLOCK_SIZE,
-                XXHashFactory.fastestInstance().newStreamingHash32(DEFAULT_SEED).asChecksum());
+        this(LZ4Factory.fastestInstance(), highCompressor, DEFAULT_BLOCK_SIZE, new Lz4XXHash32(DEFAULT_SEED));
     }
 
     /**
@@ -148,12 +156,8 @@ public class Lz4FrameEncoder extends MessageToByteEncoder<ByteBuf> {
          */
     public Lz4FrameEncoder(LZ4Factory factory, boolean highCompressor, int blockSize,
                            Checksum checksum, int maxEncodeSize) {
-        if (factory == null) {
-            throw new NullPointerException("factory");
-        }
-        if (checksum == null) {
-            throw new NullPointerException("checksum");
-        }
+        ObjectUtil.checkNotNull(factory, "factory");
+        ObjectUtil.checkNotNull(checksum, "checksum");
 
         compressor = highCompressor ? factory.highCompressor() : factory.fastCompressor();
         this.checksum = ByteBufChecksum.wrapChecksum(checksum);
@@ -228,6 +232,10 @@ public class Lz4FrameEncoder extends MessageToByteEncoder<ByteBuf> {
     @Override
     protected void encode(ChannelHandlerContext ctx, ByteBuf in, ByteBuf out) throws Exception {
         if (finished) {
+            if (!out.isWritable(in.readableBytes())) {
+                // out should be EMPTY_BUFFER because we should have allocated enough space above in allocateBuffer.
+                throw new IllegalStateException("encode finished and not enough space to write remaining data");
+            }
             out.writeBytes(in);
             return;
         }
@@ -270,7 +278,7 @@ public class Lz4FrameEncoder extends MessageToByteEncoder<ByteBuf> {
         if (compressedLength >= flushableBytes) {
             blockType = BLOCK_TYPE_NON_COMPRESSED;
             compressedLength = flushableBytes;
-            out.setBytes(idx + HEADER_LENGTH, buffer, 0, flushableBytes);
+            out.setBytes(idx + HEADER_LENGTH, buffer, buffer.readerIndex(), flushableBytes);
         } else {
             blockType = BLOCK_TYPE_COMPRESSED;
         }
@@ -301,33 +309,21 @@ public class Lz4FrameEncoder extends MessageToByteEncoder<ByteBuf> {
         }
         finished = true;
 
-        try {
-            final ByteBuf footer = ctx.alloc().heapBuffer(
-                    compressor.maxCompressedLength(buffer.readableBytes()) + HEADER_LENGTH);
-            flushBufferedData(footer);
+        final ByteBuf footer = ctx.alloc().heapBuffer(
+                compressor.maxCompressedLength(buffer.readableBytes()) + HEADER_LENGTH);
+        flushBufferedData(footer);
 
-            final int idx = footer.writerIndex();
-            footer.setLong(idx, MAGIC_NUMBER);
-            footer.setByte(idx + TOKEN_OFFSET, (byte) (BLOCK_TYPE_NON_COMPRESSED | compressionLevel));
-            footer.setInt(idx + COMPRESSED_LENGTH_OFFSET, 0);
-            footer.setInt(idx + DECOMPRESSED_LENGTH_OFFSET, 0);
-            footer.setInt(idx + CHECKSUM_OFFSET, 0);
+        footer.ensureWritable(HEADER_LENGTH);
+        final int idx = footer.writerIndex();
+        footer.setLong(idx, MAGIC_NUMBER);
+        footer.setByte(idx + TOKEN_OFFSET, (byte) (BLOCK_TYPE_NON_COMPRESSED | compressionLevel));
+        footer.setInt(idx + COMPRESSED_LENGTH_OFFSET, 0);
+        footer.setInt(idx + DECOMPRESSED_LENGTH_OFFSET, 0);
+        footer.setInt(idx + CHECKSUM_OFFSET, 0);
 
-            footer.writerIndex(idx + HEADER_LENGTH);
+        footer.writerIndex(idx + HEADER_LENGTH);
 
-            return ctx.writeAndFlush(footer, promise);
-        } finally {
-            cleanup();
-        }
-    }
-
-    private void cleanup() {
-        compressor = null;
-        checksum = null;
-        if (buffer != null) {
-            buffer.release();
-            buffer = null;
-        }
+        return ctx.writeAndFlush(footer, promise);
     }
 
     /**
@@ -361,7 +357,7 @@ public class Lz4FrameEncoder extends MessageToByteEncoder<ByteBuf> {
                 @Override
                 public void run() {
                     ChannelFuture f = finishEncode(ctx(), promise);
-                    f.addListener(new ChannelPromiseNotifier(promise));
+                    PromiseNotifier.cascade(f, promise);
                 }
             });
             return promise;
@@ -371,22 +367,8 @@ public class Lz4FrameEncoder extends MessageToByteEncoder<ByteBuf> {
     @Override
     public void close(final ChannelHandlerContext ctx, final ChannelPromise promise) throws Exception {
         ChannelFuture f = finishEncode(ctx, ctx.newPromise());
-        f.addListener(new ChannelFutureListener() {
-            @Override
-            public void operationComplete(ChannelFuture f) throws Exception {
-                ctx.close(promise);
-            }
-        });
 
-        if (!f.isDone()) {
-            // Ensure the channel is closed even if the write operation completes in time.
-            ctx.executor().schedule(new Runnable() {
-                @Override
-                public void run() {
-                    ctx.close(promise);
-                }
-            }, 10, TimeUnit.SECONDS); // FIXME: Magic number
-        }
+        EncoderUtil.closeAfterFinishEncode(ctx, f, promise);
     }
 
     private ChannelHandlerContext ctx() {
@@ -408,7 +390,10 @@ public class Lz4FrameEncoder extends MessageToByteEncoder<ByteBuf> {
     @Override
     public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
         super.handlerRemoved(ctx);
-        cleanup();
+        if (buffer != null) {
+            buffer.release();
+            buffer = null;
+        }
     }
 
     final ByteBuf getBackingBuffer() {

@@ -5,7 +5,7 @@
  * "License"); you may not use this file except in compliance with the License. You may obtain a
  * copy of the License at:
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software distributed under the License
  * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
@@ -30,7 +30,7 @@ public class EmptyHeaders<K, V, T extends Headers<K, V, T>> implements Headers<K
 
     @Override
     public V get(K name, V defaultValue) {
-        return null;
+        return defaultValue;
     }
 
     @Override
@@ -40,7 +40,7 @@ public class EmptyHeaders<K, V, T extends Headers<K, V, T>> implements Headers<K
 
     @Override
     public V getAndRemove(K name, V defaultValue) {
-        return null;
+        return defaultValue;
     }
 
     @Override
@@ -481,6 +481,16 @@ public class EmptyHeaders<K, V, T extends Headers<K, V, T>> implements Headers<K
     @Override
     public T clear() {
         return thisT();
+    }
+
+    /**
+     * Equivalent to {@link #getAll(Object)} but no intermediate list is generated.
+     * @param name the name of the header to retrieve
+     * @return an {@link Iterator} of header values corresponding to {@code name}.
+     */
+    public Iterator<V> valueIterator(@SuppressWarnings("unused") K name) {
+        List<V> empty = Collections.emptyList();
+        return empty.iterator();
     }
 
     @Override

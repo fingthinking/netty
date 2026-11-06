@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,27 +15,17 @@
  */
 package io.netty.resolver.dns;
 
-import io.netty.util.internal.UnstableApi;
-
 import java.net.InetSocketAddress;
 
 /**
  * A {@link DnsServerAddressStreamProvider} which always uses a single DNS server for resolution.
  */
-@UnstableApi
-public final class SingletonDnsServerAddressStreamProvider implements DnsServerAddressStreamProvider {
-    private final DnsServerAddresses addresses;
-
+public final class SingletonDnsServerAddressStreamProvider extends UniSequentialDnsServerAddressStreamProvider {
     /**
      * Create a new instance.
      * @param address The singleton address to use for every DNS resolution.
      */
     public SingletonDnsServerAddressStreamProvider(final InetSocketAddress address) {
-        addresses = DnsServerAddresses.singleton(address);
-    }
-
-    @Override
-    public DnsServerAddressStream nameServerAddressStream(String hostname) {
-        return addresses.stream();
+        super(DnsServerAddresses.singleton(address));
     }
 }

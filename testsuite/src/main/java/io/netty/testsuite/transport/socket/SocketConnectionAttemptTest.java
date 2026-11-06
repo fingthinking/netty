@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -22,62 +22,78 @@ import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelOption;
+import io.netty.channel.socket.oio.OioSocketChannel;
 import io.netty.util.internal.SocketUtils;
-import io.netty.testsuite.util.TestUtils;
 import io.netty.util.NetUtil;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import io.netty.util.concurrent.Promise;
-import io.netty.util.internal.SystemPropertyUtil;
-import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
+import org.junit.jupiter.api.Timeout;
 
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.Socket;
+import java.util.concurrent.TimeUnit;
 
-import static org.hamcrest.CoreMatchers.*;
-import static org.junit.Assert.*;
-import static org.junit.Assume.*;
+import static io.netty.testsuite.transport.socket.SocketTestPermutation.BAD_HOST;
+import static io.netty.testsuite.transport.socket.SocketTestPermutation.BAD_PORT;
+import static io.netty.testsuite.transport.socket.SocketTestPermutation.UNASSIGNED_PORT;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 public class SocketConnectionAttemptTest extends AbstractClientSocketTest {
 
-    private static final String BAD_HOST = SystemPropertyUtil.get("io.netty.testsuite.badHost", "netty.io");
-    private static final int BAD_PORT = SystemPropertyUtil.getInt("io.netty.testsuite.badPort", 65535);
-
-    static {
-        InternalLogger logger = InternalLoggerFactory.getInstance(SocketConnectionAttemptTest.class);
-        logger.debug("-Dio.netty.testsuite.badHost: {}", BAD_HOST);
-        logger.debug("-Dio.netty.testsuite.badPort: {}", BAD_PORT);
-    }
-
-    @Test(timeout = 30000)
-    public void testConnectTimeout() throws Throwable {
-        run();
+    @Test
+    @Timeout(value = 30000, unit = TimeUnit.MILLISECONDS)
+    public void testConnectTimeout(TestInfo testInfo) throws Throwable {
+        run(testInfo, new Runner<Bootstrap>() {
+            @Override
+            public void run(Bootstrap bootstrap) throws Throwable {
+                testConnectTimeout(bootstrap);
+            }
+        });
     }
 
     public void testConnectTimeout(Bootstrap cb) throws Throwable {
         cb.handler(new TestHandler()).option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 2000);
         ChannelFuture future = cb.connect(BAD_HOST, BAD_PORT);
         try {
-            assertThat(future.await(3000), is(true));
+            assertTrue(future.await(3000));
         } finally {
             future.channel().close();
         }
     }
 
-    @Test(timeout = 30000)
-    public void testConnectRefused() throws Throwable {
-        run();
+    @Test
+    @Timeout(value = 30000, unit = TimeUnit.MILLISECONDS)
+    public void testConnectRefused(TestInfo testInfo) throws Throwable {
+        run(testInfo, new Runner<Bootstrap>() {
+            @Override
+            public void run(Bootstrap bootstrap) throws Throwable {
+                testConnectRefused(bootstrap);
+            }
+        });
     }
 
     public void testConnectRefused(Bootstrap cb) throws Throwable {
         testConnectRefused0(cb, false);
     }
 
-    @Test(timeout = 30000)
-    public void testConnectRefusedHalfClosure() throws Throwable {
-        run();
+    @Test
+    @Timeout(value = 30000, unit = TimeUnit.MILLISECONDS)
+    public void testConnectRefusedHalfClosure(TestInfo testInfo) throws Throwable {
+        run(testInfo, new Runner<Bootstrap>() {
+            @Override
+            public void run(Bootstrap bootstrap) throws Throwable {
+                testConnectRefusedHalfClosure(bootstrap);
+            }
+        });
     }
 
     public void testConnectRefusedHalfClosure(Bootstrap cb) throws Throwable {
@@ -89,20 +105,19 @@ public class SocketConnectionAttemptTest extends AbstractClientSocketTest {
         ChannelHandler handler = new ChannelInboundHandlerAdapter() {
             @Override
             public void channelActive(ChannelHandlerContext ctx) throws Exception {
-                Channel channel = ctx.channel();
                 errorPromise.setFailure(new AssertionError("should have never been called"));
             }
         };
 
         cb.handler(handler);
         cb.option(ChannelOption.ALLOW_HALF_CLOSURE, halfClosure);
-        ChannelFuture future = cb.connect(NetUtil.LOCALHOST, TestUtils.getFreePort()).awaitUninterruptibly();
-        assertThat(future.cause(), is(instanceOf(ConnectException.class)));
-        assertThat(errorPromise.cause(), is(nullValue()));
+        ChannelFuture future = cb.connect(NetUtil.LOCALHOST, UNASSIGNED_PORT).awaitUninterruptibly();
+        assertInstanceOf(ConnectException.class, future.cause());
+        assertNull(errorPromise.cause());
     }
 
     @Test
-    public void testConnectCancellation() throws Throwable {
+    public void testConnectCancellation(TestInfo testInfo) throws Throwable {
         // Check if the test can be executed or should be skipped because of no network/internet connection
         // See https://github.com/netty/netty/issues/1474
         boolean badHostTimedOut = true;
@@ -122,9 +137,14 @@ public class SocketConnectionAttemptTest extends AbstractClientSocketTest {
             }
         }
 
-        assumeThat("The connection attempt to " + BAD_HOST + " does not time out.", badHostTimedOut, is(true));
+        assumeTrue(badHostTimedOut, "The connection attempt to " + BAD_HOST + " does not time out.");
 
-        run();
+        run(testInfo, new Runner<Bootstrap>() {
+            @Override
+            public void run(Bootstrap bootstrap) throws Throwable {
+                testConnectCancellation(bootstrap);
+            }
+        });
     }
 
     public void testConnectCancellation(Bootstrap cb) throws Throwable {
@@ -140,14 +160,21 @@ public class SocketConnectionAttemptTest extends AbstractClientSocketTest {
             }
 
             if (future.cancel(true)) {
-                assertThat(future.channel().closeFuture().await(500), is(true));
-                assertThat(future.isCancelled(), is(true));
+                assertTrue(future.channel().closeFuture().await(500));
+                assertTrue(future.isCancelled());
             } else {
-                // Cancellation not supported by the transport.
+                // Check if cancellation is supported or not.
+                assertFalse(isConnectCancellationSupported(future.channel()), future.channel().getClass() +
+                        " should support connect cancellation");
             }
         } finally {
             future.channel().close();
         }
+    }
+
+    @SuppressWarnings("deprecation")
+    protected boolean isConnectCancellationSupported(Channel channel) {
+        return !(channel instanceof OioSocketChannel);
     }
 
     private static class TestHandler extends ChannelInboundHandlerAdapter {

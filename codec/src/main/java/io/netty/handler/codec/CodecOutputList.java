@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,7 +15,8 @@
  */
 package io.netty.handler.codec;
 
-import io.netty.util.Recycler;
+import io.netty.util.concurrent.FastThreadLocal;
+import io.netty.util.internal.MathUtil;
 
 import java.util.AbstractList;
 import java.util.RandomAccess;
@@ -27,25 +28,81 @@ import static io.netty.util.internal.ObjectUtil.checkNotNull;
  */
 final class CodecOutputList extends AbstractList<Object> implements RandomAccess {
 
-    private static final Recycler<CodecOutputList> RECYCLER = new Recycler<CodecOutputList>() {
+    private static final CodecOutputListRecycler NOOP_RECYCLER = new CodecOutputListRecycler() {
         @Override
-        protected CodecOutputList newObject(Handle<CodecOutputList> handle) {
-            return new CodecOutputList(handle);
+        public void recycle(CodecOutputList object) {
+            // drop on the floor and let the GC handle it.
         }
     };
 
-    static CodecOutputList newInstance() {
-        return RECYCLER.get();
+    private static final FastThreadLocal<CodecOutputLists> CODEC_OUTPUT_LISTS_POOL =
+            new FastThreadLocal<CodecOutputLists>() {
+                @Override
+                protected CodecOutputLists initialValue() throws Exception {
+                    // 16 CodecOutputList per Thread are cached.
+                    return new CodecOutputLists(16);
+                }
+            };
+
+    private interface CodecOutputListRecycler {
+        void recycle(CodecOutputList codecOutputList);
     }
 
-    private final Recycler.Handle<CodecOutputList> handle;
+    private static final class CodecOutputLists implements CodecOutputListRecycler {
+        private final CodecOutputList[] elements;
+        private final int mask;
+
+        private int currentIdx;
+        private int count;
+
+        CodecOutputLists(int numElements) {
+            elements = new CodecOutputList[MathUtil.safeFindNextPositivePowerOfTwo(numElements)];
+            for (int i = 0; i < elements.length; ++i) {
+                // Size of 16 should be good enough for the majority of all users as an initial capacity.
+                elements[i] = new CodecOutputList(this, 16);
+            }
+            count = elements.length;
+            currentIdx = elements.length;
+            mask = elements.length - 1;
+        }
+
+        public CodecOutputList getOrCreate() {
+            if (count == 0) {
+                // Return a new CodecOutputList which will not be cached. We use a size of 4 to keep the overhead
+                // low.
+                return new CodecOutputList(NOOP_RECYCLER, 4);
+            }
+            --count;
+
+            int idx = (currentIdx - 1) & mask;
+            CodecOutputList list = elements[idx];
+            currentIdx = idx;
+            return list;
+        }
+
+        @Override
+        public void recycle(CodecOutputList codecOutputList) {
+            int idx = currentIdx;
+            elements[idx] = codecOutputList;
+            currentIdx = (idx + 1) & mask;
+            ++count;
+            assert count <= elements.length;
+        }
+    }
+
+    static CodecOutputList newInstance() {
+        return CODEC_OUTPUT_LISTS_POOL.get().getOrCreate();
+    }
+
+    private final CodecOutputListRecycler recycler;
     private int size;
-    // Size of 16 should be good enough for 99 % of all users.
-    private Object[] array = new Object[16];
+    private int maxSeenSize;
+    private Object[] array;
     private boolean insertSinceRecycled;
 
-    private CodecOutputList(Recycler.Handle<CodecOutputList> handle) {
-        this.handle = handle;
+    private CodecOutputList(CodecOutputListRecycler recycler, int size) {
+        this.recycler = recycler;
+        array = new Object[size];
     }
 
     @Override
@@ -92,7 +149,7 @@ final class CodecOutputList extends AbstractList<Object> implements RandomAccess
             expandArray();
         }
 
-        if (index != size - 1) {
+        if (index != size) {
             System.arraycopy(array, index, array, index + 1, size - index);
         }
 
@@ -118,6 +175,7 @@ final class CodecOutputList extends AbstractList<Object> implements RandomAccess
     public void clear() {
         // We only set the size to 0 and not null out the array. Null out the array will explicit requested by
         // calling recycle()
+        maxSeenSize = Math.max(maxSeenSize, size);
         size = 0;
     }
 
@@ -132,12 +190,15 @@ final class CodecOutputList extends AbstractList<Object> implements RandomAccess
      * Recycle the array which will clear it and null out all entries in the internal storage.
      */
     void recycle() {
-        for (int i = 0 ; i < size; i ++) {
+        int len = Math.max(maxSeenSize, size);
+        for (int i = 0; i < len; i ++) {
             array[i] = null;
         }
-        clear();
+        size = 0;
+        maxSeenSize = 0;
         insertSinceRecycled = false;
-        handle.recycle(this);
+
+        recycler.recycle(this);
     }
 
     /**
@@ -149,7 +210,8 @@ final class CodecOutputList extends AbstractList<Object> implements RandomAccess
 
     private void checkIndex(int index) {
         if (index >= size) {
-            throw new IndexOutOfBoundsException();
+            throw new IndexOutOfBoundsException("expected: index < ("
+                    + size + "),but actual is (" + size + ")");
         }
     }
 

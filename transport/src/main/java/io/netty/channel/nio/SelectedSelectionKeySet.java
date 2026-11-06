@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -19,6 +19,8 @@ import java.nio.channels.SelectionKey;
 import java.util.AbstractSet;
 import java.util.Arrays;
 import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.Objects;
 
 final class SelectedSelectionKeySet extends AbstractSet<SelectionKey> {
 
@@ -35,17 +37,12 @@ final class SelectedSelectionKeySet extends AbstractSet<SelectionKey> {
             return false;
         }
 
-        keys[size++] = o;
         if (size == keys.length) {
             increaseCapacity();
         }
 
+        keys[size++] = o;
         return true;
-    }
-
-    @Override
-    public int size() {
-        return size;
     }
 
     @Override
@@ -55,12 +52,44 @@ final class SelectedSelectionKeySet extends AbstractSet<SelectionKey> {
 
     @Override
     public boolean contains(Object o) {
+        SelectionKey[] array = keys;
+        for (int i = 0, s = size; i < s; i++) {
+            SelectionKey k = array[i];
+            if (k.equals(o)) {
+                return true;
+            }
+        }
         return false;
     }
 
     @Override
+    public int size() {
+        return size;
+    }
+
+    @Override
     public Iterator<SelectionKey> iterator() {
-        throw new UnsupportedOperationException();
+        return new Iterator<SelectionKey>() {
+            private int idx;
+
+            @Override
+            public boolean hasNext() {
+                return idx < size;
+            }
+
+            @Override
+            public SelectionKey next() {
+                if (!hasNext()) {
+                    throw new NoSuchElementException();
+                }
+                return keys[idx++];
+            }
+
+            @Override
+            public void remove() {
+                throw new UnsupportedOperationException();
+            }
+        };
     }
 
     void reset() {

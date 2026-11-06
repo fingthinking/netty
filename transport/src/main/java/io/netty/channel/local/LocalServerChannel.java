@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -20,7 +20,10 @@ import io.netty.channel.ChannelConfig;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.DefaultChannelConfig;
 import io.netty.channel.EventLoop;
+import io.netty.channel.PreferHeapByteBufAllocator;
+import io.netty.channel.RecvByteBufAllocator;
 import io.netty.channel.ServerChannel;
+import io.netty.channel.ServerChannelRecvByteBufAllocator;
 import io.netty.channel.SingleThreadEventLoop;
 import io.netty.util.concurrent.SingleThreadEventExecutor;
 
@@ -33,7 +36,8 @@ import java.util.Queue;
  */
 public class LocalServerChannel extends AbstractServerChannel {
 
-    private final ChannelConfig config = new DefaultChannelConfig(this);
+    private final ChannelConfig config =
+            new DefaultChannelConfig(this, new ServerChannelRecvByteBufAllocator()) { };
     private final Queue<Object> inboundBuffer = new ArrayDeque<Object>();
     private final Runnable shutdownHook = new Runnable() {
         @Override
@@ -106,6 +110,13 @@ public class LocalServerChannel extends AbstractServerChannel {
             }
             state = 2;
         }
+
+        // Close connections that were queued but never accepted, so their connect attempt fails instead of
+        // never completing.
+        Object m;
+        while ((m = inboundBuffer.poll()) != null) {
+            ((LocalChannel) m).unsafe().closeForcibly();
+        }
     }
 
     @Override
@@ -125,15 +136,7 @@ public class LocalServerChannel extends AbstractServerChannel {
             return;
         }
 
-        ChannelPipeline pipeline = pipeline();
-        for (;;) {
-            Object m = inboundBuffer.poll();
-            if (m == null) {
-                break;
-            }
-            pipeline.fireChannelRead(m);
-        }
-        pipeline.fireChannelReadComplete();
+        readInbound();
     }
 
     LocalChannel serve(final LocalChannel peer) {
@@ -142,13 +145,29 @@ public class LocalServerChannel extends AbstractServerChannel {
             serve0(child);
         } else {
             eventLoop().execute(new Runnable() {
-              @Override
-              public void run() {
-                serve0(child);
-              }
+                @Override
+                public void run() {
+                    serve0(child);
+                }
             });
         }
         return child;
+    }
+
+    private void readInbound() {
+        RecvByteBufAllocator.Handle handle = unsafe().recvBufAllocHandle();
+        handle.reset(config());
+        ChannelPipeline pipeline = pipeline();
+        do {
+            Object m = inboundBuffer.poll();
+            if (m == null) {
+                break;
+            }
+            handle.incMessagesRead(1);
+            pipeline.fireChannelRead(m);
+        } while (handle.continueReading());
+        handle.readComplete();
+        pipeline.fireChannelReadComplete();
     }
 
     /**
@@ -160,18 +179,15 @@ public class LocalServerChannel extends AbstractServerChannel {
     }
 
     private void serve0(final LocalChannel child) {
+        if (!isOpen()) {
+            child.unsafe().closeForcibly();
+            return;
+        }
         inboundBuffer.add(child);
         if (acceptInProgress) {
             acceptInProgress = false;
-            ChannelPipeline pipeline = pipeline();
-            for (;;) {
-                Object m = inboundBuffer.poll();
-                if (m == null) {
-                    break;
-                }
-                pipeline.fireChannelRead(m);
-            }
-            pipeline.fireChannelReadComplete();
+
+            readInbound();
         }
     }
 }

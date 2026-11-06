@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,9 +15,9 @@
  */
 package io.netty.util;
 
-import io.netty.util.ByteProcessor.IndexOfProcessor;
 import io.netty.util.internal.EmptyArrays;
 import io.netty.util.internal.InternalThreadLocalMap;
+import io.netty.util.internal.ObjectUtil;
 import io.netty.util.internal.PlatformDependent;
 
 import java.nio.ByteBuffer;
@@ -45,7 +45,7 @@ import static io.netty.util.internal.ObjectUtil.checkNotNull;
  * {@link #arrayChanged()} so the state of this class can be reset.
  */
 public final class AsciiString implements CharSequence, Comparable<CharSequence> {
-    public static final AsciiString EMPTY_STRING = new AsciiString("");
+    public static final AsciiString EMPTY_STRING = cached("");
     private static final char MAX_CHAR_VALUE = 255;
 
     public static final int INDEX_NOT_FOUND = -1;
@@ -94,7 +94,9 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
      */
     public AsciiString(byte[] value, int start, int length, boolean copy) {
         if (copy) {
-            this.value = Arrays.copyOfRange(value, start, start + length);
+            final byte[] rangedCopy = new byte[length];
+            System.arraycopy(value, start, rangedCopy, 0, rangedCopy.length);
+            this.value = rangedCopy;
             this.offset = 0;
         } else {
             if (isOutOfBounds(start, length, value.length)) {
@@ -147,7 +149,7 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
                 this.offset = start;
             }
         } else {
-            this.value = new byte[length];
+            this.value = PlatformDependent.allocateUninitializedArray(length);
             int oldPos = value.position();
             value.get(this.value, 0, length);
             value.position(oldPos);
@@ -173,7 +175,7 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
                             + ") <= " + "value.length(" + value.length + ')');
         }
 
-        this.value = new byte[length];
+        this.value = PlatformDependent.allocateUninitializedArray(length);
         for (int i = 0, j = start; i < length; i++, j++) {
             this.value[i] = c2b(value[j]);
         }
@@ -220,7 +222,7 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
                             + ") <= " + "value.length(" + value.length() + ')');
         }
 
-        this.value = new byte[length];
+        this.value = PlatformDependent.allocateUninitializedArray(length);
         for (int i = 0, j = start; i < length; i++, j++) {
             this.value[i] = c2b(value.charAt(j));
         }
@@ -478,13 +480,13 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
             return this;
         }
 
-        if (string.getClass() == AsciiString.class) {
+        if (string instanceof AsciiString) {
             AsciiString that = (AsciiString) string;
             if (isEmpty()) {
                 return that;
             }
 
-            byte[] newValue = new byte[thisLen + thatLen];
+            byte[] newValue = PlatformDependent.allocateUninitializedArray(thisLen + thatLen);
             System.arraycopy(value, arrayOffset(), newValue, 0, thisLen);
             System.arraycopy(that.value, that.arrayOffset(), newValue, thisLen, thatLen);
             return new AsciiString(newValue, false);
@@ -494,7 +496,7 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
             return new AsciiString(string);
         }
 
-        byte[] newValue = new byte[thisLen + thatLen];
+        byte[] newValue = PlatformDependent.allocateUninitializedArray(thisLen + thatLen);
         System.arraycopy(value, arrayOffset(), newValue, 0, thisLen);
         for (int i = thisLen, j = 0; i < newValue.length; i++, j++) {
             newValue[i] = c2b(string.charAt(j));
@@ -523,22 +525,43 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
      * @return {@code true} if the specified string is equal to this string, {@code false} otherwise.
      */
     public boolean contentEqualsIgnoreCase(CharSequence string) {
+        if (this == string) {
+            return true;
+        }
+
         if (string == null || string.length() != length()) {
             return false;
         }
 
-        if (string.getClass() == AsciiString.class) {
-            AsciiString rhs = (AsciiString) string;
-            for (int i = arrayOffset(), j = rhs.arrayOffset(); i < length(); ++i, ++j) {
-                if (!equalsIgnoreCase(value[i], rhs.value[j])) {
-                    return false;
+        if (string instanceof AsciiString) {
+            AsciiString other = (AsciiString) string;
+            byte[] value = this.value;
+            if (offset == 0 && other.offset == 0 && length == value.length) {
+                byte[] otherValue = other.value;
+                for (int i = 0; i < value.length; ++i) {
+                    if (!equalsIgnoreCase(value[i], otherValue[i])) {
+                        return false;
+                    }
                 }
+                return true;
             }
-            return true;
+            return misalignedEqualsIgnoreCase(other);
         }
 
-        for (int i = arrayOffset(), j = 0; i < length(); ++i, ++j) {
+        byte[] value = this.value;
+        for (int i = offset, j = 0; j < string.length(); ++i, ++j) {
             if (!equalsIgnoreCase(b2c(value[i]), string.charAt(j))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean misalignedEqualsIgnoreCase(AsciiString other) {
+        byte[] value = this.value;
+        byte[] otherValue = other.value;
+        for (int i = offset, j = other.offset, end = offset + length; i < end; ++i, ++j) {
+            if (!equalsIgnoreCase(value[i], otherValue[j])) {
                 return false;
             }
         }
@@ -586,9 +609,7 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
      * @param length the number of characters to copy.
      */
     public void copy(int srcIdx, char[] dst, int dstIdx, int length) {
-        if (dst == null) {
-            throw new NullPointerException("dst");
-        }
+        ObjectUtil.checkNotNull(dst, "dst");
 
         if (isOutOfBounds(srcIdx, length, length())) {
             throw new IndexOutOfBoundsException("expected: " + "0 <= srcIdx(" + srcIdx + ") <= srcIdx + length("
@@ -673,44 +694,35 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
      * @throws NullPointerException if {@code subString} is {@code null}.
      */
     public int indexOf(CharSequence subString, int start) {
+        final int subCount = subString.length();
         if (start < 0) {
             start = 0;
         }
-
-        final int thisLen = length();
-
-        int subCount = subString.length();
         if (subCount <= 0) {
-            return start < thisLen ? start : thisLen;
+            return start < length ? start : length;
         }
-        if (subCount > thisLen - start) {
-            return -1;
+        if (subCount > length - start) {
+            return INDEX_NOT_FOUND;
         }
 
         final char firstChar = subString.charAt(0);
         if (firstChar > MAX_CHAR_VALUE) {
-            return -1;
+            return INDEX_NOT_FOUND;
         }
-        ByteProcessor IndexOfVisitor = new IndexOfProcessor((byte) firstChar);
-        try {
-            for (;;) {
-                int i = forEachByte(start, thisLen - start, IndexOfVisitor);
-                if (i == -1 || subCount + i > thisLen) {
-                    return -1; // handles subCount > count || start >= count
-                }
+        final byte firstCharAsByte = c2b0(firstChar);
+        final int len = offset + length - subCount;
+        for (int i = start + offset; i <= len; ++i) {
+            if (value[i] == firstCharAsByte) {
                 int o1 = i, o2 = 0;
-                while (++o2 < subCount && b2c(value[++o1 + arrayOffset()]) == subString.charAt(o2)) {
+                while (++o2 < subCount && b2c(value[++o1]) == subString.charAt(o2)) {
                     // Intentionally empty
                 }
                 if (o2 == subCount) {
-                    return i;
+                    return i - offset;
                 }
-                start = i + 1;
             }
-        } catch (Exception e) {
-            PlatformDependent.throwException(e);
-            return -1;
         }
+        return INDEX_NOT_FOUND;
     }
 
     /**
@@ -723,22 +735,22 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
      * -1 if found no occurrence.
      */
     public int indexOf(char ch, int start) {
+        if (ch > MAX_CHAR_VALUE) {
+            return INDEX_NOT_FOUND;
+        }
+
         if (start < 0) {
             start = 0;
         }
 
-        final int thisLen = length();
-
-        if (ch > MAX_CHAR_VALUE) {
-            return -1;
+        final byte chAsByte = c2b0(ch);
+        final int len = offset + length;
+        for (int i = start + offset; i < len; ++i) {
+            if (value[i] == chAsByte) {
+                return i - offset;
+            }
         }
-
-        try {
-            return forEachByte(start, thisLen - start, new IndexOfProcessor((byte) ch));
-        } catch (Exception e) {
-            PlatformDependent.throwException(e);
-            return -1;
-        }
+        return INDEX_NOT_FOUND;
     }
 
     /**
@@ -752,7 +764,7 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
      */
     public int lastIndexOf(CharSequence string) {
         // Use count instead of count - 1 so lastIndexOf("") answers count
-        return lastIndexOf(string, length());
+        return lastIndexOf(string, length);
     }
 
     /**
@@ -766,44 +778,32 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
      * @throws NullPointerException if {@code subString} is {@code null}.
      */
     public int lastIndexOf(CharSequence subString, int start) {
-        final int thisLen = length();
         final int subCount = subString.length();
-
-        if (subCount > thisLen || start < 0) {
-            return -1;
+        start = Math.min(start, length - subCount);
+        if (start < 0) {
+            return INDEX_NOT_FOUND;
+        }
+        if (subCount == 0) {
+            return start;
         }
 
-        if (subCount <= 0) {
-            return start < thisLen ? start : thisLen;
-        }
-
-        start = Math.min(start, thisLen - subCount);
-
-        // count and subCount are both >= 1
         final char firstChar = subString.charAt(0);
         if (firstChar > MAX_CHAR_VALUE) {
-            return -1;
+            return INDEX_NOT_FOUND;
         }
-        ByteProcessor IndexOfVisitor = new IndexOfProcessor((byte) firstChar);
-        try {
-            for (;;) {
-                int i = forEachByteDesc(start, thisLen - start, IndexOfVisitor);
-                if (i == -1) {
-                    return -1;
-                }
+        final byte firstCharAsByte = c2b0(firstChar);
+        for (int i = offset + start; i >= offset; --i) {
+            if (value[i] == firstCharAsByte) {
                 int o1 = i, o2 = 0;
-                while (++o2 < subCount && b2c(value[++o1 + arrayOffset()]) == subString.charAt(o2)) {
+                while (++o2 < subCount && b2c(value[++o1]) == subString.charAt(o2)) {
                     // Intentionally empty
                 }
                 if (o2 == subCount) {
-                    return i;
+                    return i - offset;
                 }
-                start = i - 1;
             }
-        } catch (Exception e) {
-            PlatformDependent.throwException(e);
-            return -1;
         }
+        return INDEX_NOT_FOUND;
     }
 
     /**
@@ -818,9 +818,7 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
      * @throws NullPointerException if {@code string} is {@code null}.
      */
     public boolean regionMatches(int thisStart, CharSequence string, int start, int length) {
-        if (string == null) {
-            throw new NullPointerException("string");
-        }
+        ObjectUtil.checkNotNull(string, "string");
 
         if (start < 0 || string.length() - start < length) {
             return false;
@@ -835,6 +833,11 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
             return true;
         }
 
+        if (string instanceof AsciiString) {
+            final AsciiString asciiString = (AsciiString) string;
+            return PlatformDependent.equals(value, thisStart + offset, asciiString.value,
+                                            start + asciiString.offset, length);
+        }
         final int thatEnd = start + length;
         for (int i = start, j = thisStart + arrayOffset(); i < thatEnd; i++, j++) {
             if (b2c(value[j]) != string.charAt(i)) {
@@ -861,9 +864,7 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
             return regionMatches(thisStart, string, start, length);
         }
 
-        if (string == null) {
-            throw new NullPointerException("string");
-        }
+        ObjectUtil.checkNotNull(string, "string");
 
         final int thisLen = length();
         if (thisStart < 0 || length > thisLen - thisStart) {
@@ -875,6 +876,18 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
 
         thisStart += arrayOffset();
         final int thisEnd = thisStart + length;
+        if (string instanceof AsciiString) {
+            final AsciiString asciiString = (AsciiString) string;
+            final byte[] value = this.value;
+            final byte[] otherValue = asciiString.value;
+            start += asciiString.offset;
+            while (thisStart < thisEnd) {
+                if (!equalsIgnoreCase(value[thisStart++], otherValue[start++])) {
+                    return false;
+                }
+            }
+            return true;
+        }
         while (thisStart < thisEnd) {
             if (!equalsIgnoreCase(b2c(value[thisStart++]), string.charAt(start++))) {
                 return false;
@@ -895,29 +908,23 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
             return this;
         }
 
-        final int index;
-        final byte oldCharByte = c2b(oldChar);
-        try {
-            index = forEachByte(new IndexOfProcessor(oldCharByte));
-        } catch (Exception e) {
-            PlatformDependent.throwException(e);
-            return this;
-        }
-        if (index == -1) {
-            return this;
-        }
-
-        final byte newCharByte = c2b(newChar);
-        byte[] buffer = new byte[length()];
-        for (int i = 0, j = arrayOffset(); i < buffer.length; i++, j++) {
-            byte b = value[j];
-            if (b == oldCharByte) {
-                b = newCharByte;
+        final byte oldCharAsByte = c2b0(oldChar);
+        final byte newCharAsByte = c2b(newChar);
+        final int len = offset + length;
+        for (int i = offset; i < len; ++i) {
+            if (value[i] == oldCharAsByte) {
+                byte[] buffer = PlatformDependent.allocateUninitializedArray(length());
+                System.arraycopy(value, offset, buffer, 0, i - offset);
+                buffer[i - offset] = newCharAsByte;
+                ++i;
+                for (; i < len; ++i) {
+                    byte oldValue = value[i];
+                    buffer[i - offset] = oldValue != oldCharAsByte ? oldValue : newCharAsByte;
+                }
+                return new AsciiString(buffer, false);
             }
-            buffer[i] = b;
         }
-
-        return new AsciiString(buffer, false);
+        return this;
     }
 
     /**
@@ -951,28 +958,7 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
      * @return a new string containing the lowercase characters equivalent to the characters in this string.
      */
     public AsciiString toLowerCase() {
-        boolean lowercased = true;
-        int i, j;
-        final int len = length() + arrayOffset();
-        for (i = arrayOffset(); i < len; ++i) {
-            byte b = value[i];
-            if (b >= 'A' && b <= 'Z') {
-                lowercased = false;
-                break;
-            }
-        }
-
-        // Check if this string does not contain any uppercase characters.
-        if (lowercased) {
-            return this;
-        }
-
-        final byte[] newValue = new byte[length()];
-        for (i = 0, j = arrayOffset(); i < newValue.length; ++i, ++j) {
-            newValue[i] = toLowerCase(value[j]);
-        }
-
-        return new AsciiString(newValue, false);
+        return AsciiStringUtil.toLowerCase(this);
     }
 
     /**
@@ -981,32 +967,40 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
      * @return a new string containing the uppercase characters equivalent to the characters in this string.
      */
     public AsciiString toUpperCase() {
-        boolean uppercased = true;
-        int i, j;
-        final int len = length() + arrayOffset();
-        for (i = arrayOffset(); i < len; ++i) {
-            byte b = value[i];
-            if (b >= 'a' && b <= 'z') {
-                uppercased = false;
-                break;
-            }
-        }
-
-        // Check if this string does not contain any lowercase characters.
-        if (uppercased) {
-            return this;
-        }
-
-        final byte[] newValue = new byte[length()];
-        for (i = 0, j = arrayOffset(); i < newValue.length; ++i, ++j) {
-            newValue[i] = toUpperCase(value[j]);
-        }
-
-        return new AsciiString(newValue, false);
+        return AsciiStringUtil.toUpperCase(this);
     }
 
     /**
-     * Copies this string removing white space characters from the beginning and end of the string.
+     * Copies this string removing white space characters from the beginning and end of the string, and tries not to
+     * copy if possible.
+     *
+     * @param c The {@link CharSequence} to trim.
+     * @return a new string with characters {@code <= \\u0020} removed from the beginning and the end.
+     */
+    public static CharSequence trim(CharSequence c) {
+        if (c instanceof AsciiString) {
+            return ((AsciiString) c).trim();
+        }
+        if (c instanceof String) {
+            return ((String) c).trim();
+        }
+        int start = 0, last = c.length() - 1;
+        int end = last;
+        while (start <= end && c.charAt(start) <= ' ') {
+            start++;
+        }
+        while (end >= start && c.charAt(end) <= ' ') {
+            end--;
+        }
+        if (start == 0 && end == last) {
+            return c;
+        }
+        return c.subSequence(start, end + 1);
+    }
+
+    /**
+     * Duplicates this string removing white space characters from the beginning and end of the
+     * string, without copying.
      *
      * @return a new string with characters {@code <= \\u0020} removed from the beginning and the end.
      */
@@ -1032,10 +1026,14 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
      * @return {@code true} if equal, otherwise {@code false}
      */
     public boolean contentEquals(CharSequence a) {
+        if (this == a) {
+            return true;
+        }
+
         if (a == null || a.length() != length()) {
             return false;
         }
-        if (a.getClass() == AsciiString.class) {
+        if (a instanceof AsciiString) {
             return equals(a);
         }
 
@@ -1111,7 +1109,7 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
             }
         }
 
-        return res.toArray(new AsciiString[res.size()]);
+        return res.toArray(EmptyArrays.EMPTY_ASCII_STRINGS);
     }
 
     /**
@@ -1121,10 +1119,12 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
      */
     @Override
     public int hashCode() {
-        if (hash == 0) {
-            hash = PlatformDependent.hashCodeAscii(value, offset, length);
+        int h = hash;
+        if (h == 0) {
+            h = PlatformDependent.hashCodeAscii(value, offset, length);
+            hash = h;
         }
-        return hash;
+        return h;
     }
 
     @Override
@@ -1148,11 +1148,12 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
      */
     @Override
     public String toString() {
-        if (string != null) {
-            return string;
+        String cache = string;
+        if (cache == null) {
+            cache = toString(0);
+            string = cache;
         }
-        string = toString(0);
-        return string;
+        return cache;
     }
 
     /**
@@ -1381,7 +1382,33 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
      * {@link AsciiString}, just returns the same instance.
      */
     public static AsciiString of(CharSequence string) {
-        return string.getClass() == AsciiString.class ? (AsciiString) string : new AsciiString(string);
+        return string instanceof AsciiString ? (AsciiString) string : new AsciiString(string);
+    }
+
+    /**
+     * Returns an {@link AsciiString} containing the given string and retains/caches the
+     * input string for later use in {@link #toString()}.
+     * If the input contains only Latin-1 characters (0-255), the original string is reused
+     * to preserve identity for faster equality checks. Otherwise, the string is reconstructed
+     * from the Latin-1 byte content to guarantee consistency (the constructor's {@link #c2b(char)}
+     * converts non-Latin-1 characters to {@code '?'}).
+     * Used for the constants (which already stored in the JVM's string table) and in cases
+     * where the guaranteed use of the {@link #toString()} method.
+     */
+    public static AsciiString cached(String string) {
+        byte[] value = PlatformDependent.allocateUninitializedArray(string.length());
+        boolean allLatin1 = true;
+        for (int i = 0; i < value.length; i++) {
+            char c = string.charAt(i);
+            value[i] = c2b(c);
+            if (c > MAX_CHAR_VALUE) {
+                allLatin1 = false;
+            }
+        }
+
+        AsciiString asciiString = new AsciiString(value, false);
+        asciiString.string = allLatin1 ? string : asciiString.toString(0);
+        return asciiString;
     }
 
     /**
@@ -1393,7 +1420,7 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
         if (value == null) {
             return 0;
         }
-        if (value.getClass() == AsciiString.class) {
+        if (value instanceof AsciiString) {
             return value.hashCode();
         }
 
@@ -1423,18 +1450,18 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
             return a == b;
         }
 
-        if (a.getClass() == AsciiString.class) {
+        if (a instanceof AsciiString) {
             return ((AsciiString) a).contentEqualsIgnoreCase(b);
         }
-        if (b.getClass() == AsciiString.class) {
+        if (b instanceof AsciiString) {
             return ((AsciiString) b).contentEqualsIgnoreCase(a);
         }
 
         if (a.length() != b.length()) {
             return false;
         }
-        for (int i = 0, j = 0; i < a.length(); ++i, ++j) {
-            if (!equalsIgnoreCase(a.charAt(i),  b.charAt(j))) {
+        for (int i = 0; i < a.length(); ++i) {
+            if (!equalsIgnoreCase(a.charAt(i),  b.charAt(i))) {
                 return false;
             }
         }
@@ -1485,11 +1512,11 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
             return a == b;
         }
 
-        if (a.getClass() == AsciiString.class) {
+        if (a instanceof AsciiString) {
             return ((AsciiString) a).contentEquals(b);
         }
 
-        if (b.getClass() == AsciiString.class) {
+        if (b instanceof AsciiString) {
             return ((AsciiString) b).contentEquals(a);
         }
 
@@ -1557,18 +1584,9 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
         if (b.length() == 0) {
             return true;
         }
-        int bStart = 0;
-        for (int i = 0; i < a.length(); ++i) {
-            if (cmp.equals(b.charAt(bStart), a.charAt(i))) {
-                // If b is consumed then true.
-                if (++bStart == b.length()) {
-                    return true;
-                }
-            } else if (a.length() - i < b.length()) {
-                // If there are not enough characters left in a for b to be contained, then false.
-                return false;
-            } else {
-                bStart = 0;
+        for (int i = 0, last = a.length() - b.length(); i <= last; ++i) {
+            if (regionMatchesCharSequences(a, i, b, 0, b.length(), cmp)) {
+                return true;
             }
         }
         return false;
@@ -1788,10 +1806,7 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
             return INDEX_NOT_FOUND;
         }
         final int sz = cs.length();
-        if (start < 0) {
-            start = 0;
-        }
-        for (int i = start; i < sz; i++) {
+        for (int i = start < 0 ? 0 : start; i < sz; i++) {
             if (cs.charAt(i) == searchChar) {
                 return i;
             }
@@ -1800,31 +1815,29 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
     }
 
     private static boolean equalsIgnoreCase(byte a, byte b) {
-        return a == b || toLowerCase(a) == toLowerCase(b);
+        return a == b || AsciiStringUtil.toLowerCase(a) == AsciiStringUtil.toLowerCase(b);
     }
 
     private static boolean equalsIgnoreCase(char a, char b) {
         return a == b || toLowerCase(a) == toLowerCase(b);
     }
 
-    private static byte toLowerCase(byte b) {
-        return isUpperCase(b) ? (byte) (b + 32) : b;
-    }
-
-    private static char toLowerCase(char c) {
+    /**
+     * If the character is uppercase - converts the character to lowercase,
+     * otherwise returns the character as it is. Only for ASCII characters.
+     *
+     * @return lowercase ASCII character equivalent
+     */
+    public static char toLowerCase(char c) {
         return isUpperCase(c) ? (char) (c + 32) : c;
     }
 
     private static byte toUpperCase(byte b) {
-        return isLowerCase(b) ? (byte) (b - 32) : b;
-    }
-
-    private static boolean isLowerCase(byte value) {
-        return value >= 'a' && value <= 'z';
+        return AsciiStringUtil.toUpperCase(b);
     }
 
     public static boolean isUpperCase(byte value) {
-        return value >= 'A' && value <= 'Z';
+        return AsciiStringUtil.isUpperCase(value);
     }
 
     public static boolean isUpperCase(char value) {
@@ -1833,6 +1846,10 @@ public final class AsciiString implements CharSequence, Comparable<CharSequence>
 
     public static byte c2b(char c) {
         return (byte) ((c > MAX_CHAR_VALUE) ? '?' : c);
+    }
+
+    private static byte c2b0(char c) {
+        return (byte) c;
     }
 
     public static char b2c(byte b) {

@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -19,7 +19,10 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.handler.codec.DateFormatter;
 import io.netty.handler.codec.Headers;
+import io.netty.handler.codec.HeadersUtils;
 import io.netty.util.AsciiString;
+import io.netty.util.CharsetUtil;
+import io.netty.util.internal.ObjectUtil;
 
 import java.text.ParseException;
 import java.util.Calendar;
@@ -30,11 +33,17 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 
+import static io.netty.util.AsciiString.contentEquals;
+import static io.netty.util.AsciiString.contentEqualsIgnoreCase;
+import static io.netty.util.AsciiString.trim;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
 
 /**
  * Provides the constants for the standard HTTP header names and values and
  * commonly used utility methods that accesses an {@link HttpMessage}.
+ * <p>
+ * Concrete instances of this class are most easily obtained from its default factory:
+ * {@link DefaultHttpHeadersFactory#headersFactory()}.
  */
 public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>> {
     /**
@@ -604,7 +613,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
      * If the specified value is not a {@link String}, it is converted into a
      * {@link String} by {@link Object#toString()}, except for {@link Date}
      * and {@link Calendar} which are formatted to the date format defined in
-     * <a href="http://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1">RFC2616</a>.
+     * <a href="https://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1">RFC2616</a>.
      */
     @Deprecated
     public static void setHeader(HttpMessage message, CharSequence name, Object value) {
@@ -659,7 +668,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
      * If the specified value is not a {@link String}, it is converted into a
      * {@link String} by {@link Object#toString()}, except for {@link Date}
      * and {@link Calendar} which are formatted to the date format defined in
-     * <a href="http://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1">RFC2616</a>.
+     * <a href="https://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1">RFC2616</a>.
      */
     @Deprecated
     public static void addHeader(HttpMessage message, CharSequence name, Object value) {
@@ -890,7 +899,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
      * Sets a new date header with the specified name and value.  If there
      * is an existing header with the same name, the existing header is removed.
      * The specified value is formatted as defined in
-     * <a href="http://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1">RFC2616</a>
+     * <a href="https://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1">RFC2616</a>
      */
     @Deprecated
     public static void setDateHeader(HttpMessage message, CharSequence name, Date value) {
@@ -917,7 +926,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
      * Sets a new date header with the specified name and values.  If there
      * is an existing header with the same name, the existing header is removed.
      * The specified values are formatted as defined in
-     * <a href="http://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1">RFC2616</a>
+     * <a href="https://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1">RFC2616</a>
      */
     @Deprecated
     public static void setDateHeader(HttpMessage message, CharSequence name, Iterable<Date> values) {
@@ -939,7 +948,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
      *
      * Adds a new date header with the specified name and value.  The specified
      * value is formatted as defined in
-     * <a href="http://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1">RFC2616</a>
+     * <a href="https://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1">RFC2616</a>
      */
     @Deprecated
     public static void addDateHeader(HttpMessage message, CharSequence name, Date value) {
@@ -1145,22 +1154,15 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
      */
     @Deprecated
     public static boolean equalsIgnoreCase(CharSequence name1, CharSequence name2) {
-        return AsciiString.contentEqualsIgnoreCase(name1, name2);
+        return contentEqualsIgnoreCase(name1, name2);
     }
 
-    static void encode(HttpHeaders headers, ByteBuf buf) throws Exception {
-        Iterator<Entry<CharSequence, CharSequence>> iter = headers.iteratorCharSequence();
-        while (iter.hasNext()) {
-            Entry<CharSequence, CharSequence> header = iter.next();
-            HttpHeadersEncoder.encoderHeader(header.getKey(), header.getValue(), buf);
-        }
-    }
-
+    @Deprecated
     public static void encodeAscii(CharSequence seq, ByteBuf buf) {
         if (seq instanceof AsciiString) {
             ByteBufUtil.copy((AsciiString) seq, 0, buf, seq.length());
         } else {
-            HttpUtil.encodeAscii0(seq, buf);
+            buf.writeCharSequence(seq, CharsetUtil.US_ASCII);
         }
     }
 
@@ -1316,6 +1318,24 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
     public abstract Iterator<Entry<CharSequence, CharSequence>> iteratorCharSequence();
 
     /**
+     * Equivalent to {@link #getAll(String)} but it is possible that no intermediate list is generated.
+     * @param name the name of the header to retrieve
+     * @return an {@link Iterator} of header values corresponding to {@code name}.
+     */
+    public Iterator<String> valueStringIterator(CharSequence name) {
+        return getAll(name).iterator();
+    }
+
+    /**
+     * Equivalent to {@link #getAll(String)} but it is possible that no intermediate list is generated.
+     * @param name the name of the header to retrieve
+     * @return an {@link Iterator} of header values corresponding to {@code name}.
+     */
+    public Iterator<? extends CharSequence> valueCharSequenceIterator(CharSequence name) {
+        return valueStringIterator(name);
+    }
+
+    /**
      * Checks to see if there is a header with the specified name
      *
      * @param name The name of the header to search for
@@ -1353,7 +1373,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
      * If the specified value is not a {@link String}, it is converted
      * into a {@link String} by {@link Object#toString()}, except in the cases
      * of {@link Date} and {@link Calendar}, which are formatted to the date
-     * format defined in <a href="http://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1">RFC2616</a>.
+     * format defined in <a href="https://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1">RFC2616</a>.
      *
      * @param name The name of the header being added
      * @param value The value of the header being added
@@ -1396,9 +1416,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
      * @return {@code this}
      */
     public HttpHeaders add(HttpHeaders headers) {
-        if (headers == null) {
-            throw new NullPointerException("headers");
-        }
+        ObjectUtil.checkNotNull(headers, "headers");
         for (Map.Entry<String, String> e: headers) {
             add(e.getKey(), e.getValue());
         }
@@ -1433,7 +1451,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
      * If the specified value is not a {@link String}, it is converted into a
      * {@link String} by {@link Object#toString()}, except for {@link Date}
      * and {@link Calendar}, which are formatted to the date format defined in
-     * <a href="http://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1">RFC2616</a>.
+     * <a href="https://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3.1">RFC2616</a>.
      *
      * @param name The name of the header being set
      * @param value The value of the header being set
@@ -1552,18 +1570,16 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
      * @see #contains(CharSequence, CharSequence, boolean)
      */
     public boolean contains(String name, String value, boolean ignoreCase) {
-        List<String> values = getAll(name);
-        if (values.isEmpty()) {
-            return false;
-        }
-
-        for (String v: values) {
-            if (ignoreCase) {
-                if (v.equalsIgnoreCase(value)) {
+        Iterator<String> valueIterator = valueStringIterator(name);
+        if (ignoreCase) {
+            while (valueIterator.hasNext()) {
+                if (valueIterator.next().equalsIgnoreCase(value)) {
                     return true;
                 }
-            } else {
-                if (v.equals(value)) {
+            }
+        } else {
+            while (valueIterator.hasNext()) {
+                if (valueIterator.next().equals(value)) {
                     return true;
                 }
             }
@@ -1582,31 +1598,55 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
      * otherwise a case sensitive compare is run to compare values.
      */
     public boolean containsValue(CharSequence name, CharSequence value, boolean ignoreCase) {
-        List<String> values = getAll(name);
-        if (values.isEmpty()) {
-            return false;
-        }
-
-        for (String v: values) {
-            if (contains(v, value, ignoreCase)) {
+        Iterator<? extends CharSequence> itr = valueCharSequenceIterator(name);
+        while (itr.hasNext()) {
+            if (containsCommaSeparatedTrimmed(itr.next(), value, ignoreCase)) {
                 return true;
             }
         }
         return false;
     }
 
-    private static boolean contains(String value, CharSequence expected, boolean ignoreCase) {
-        String[] parts = value.split(",");
+    private static boolean containsCommaSeparatedTrimmed(CharSequence rawNext, CharSequence expected,
+                                                         boolean ignoreCase) {
+        int begin = 0;
+        int end;
         if (ignoreCase) {
-            for (String s: parts) {
-                if (AsciiString.contentEqualsIgnoreCase(expected, s.trim())) {
+            if ((end = AsciiString.indexOf(rawNext, ',', begin)) == -1) {
+                if (contentEqualsIgnoreCase(trim(rawNext), expected)) {
                     return true;
+                }
+            } else {
+                do {
+                    if (contentEqualsIgnoreCase(trim(rawNext.subSequence(begin, end)), expected)) {
+                        return true;
+                    }
+                    begin = end + 1;
+                } while ((end = AsciiString.indexOf(rawNext, ',', begin)) != -1);
+
+                if (begin < rawNext.length()) {
+                    if (contentEqualsIgnoreCase(trim(rawNext.subSequence(begin, rawNext.length())), expected)) {
+                        return true;
+                    }
                 }
             }
         } else {
-            for (String s: parts) {
-                if (AsciiString.contentEquals(expected, s.trim())) {
+            if ((end = AsciiString.indexOf(rawNext, ',', begin)) == -1) {
+                if (contentEquals(trim(rawNext), expected)) {
                     return true;
+                }
+            } else {
+                do {
+                    if (contentEquals(trim(rawNext.subSequence(begin, end)), expected)) {
+                        return true;
+                    }
+                    begin = end + 1;
+                } while ((end = AsciiString.indexOf(rawNext, ',', begin)) != -1);
+
+                if (begin < rawNext.length()) {
+                    if (contentEquals(trim(rawNext.subSequence(begin, rawNext.length())), expected)) {
+                        return true;
+                    }
                 }
             }
         }
@@ -1649,5 +1689,17 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
      */
     public boolean contains(CharSequence name, CharSequence value, boolean ignoreCase) {
         return contains(name.toString(), value.toString(), ignoreCase);
+    }
+
+    @Override
+    public String toString() {
+        return HeadersUtils.toString(getClass(), iteratorCharSequence(), size());
+    }
+
+    /**
+     * Returns a deep copy of the passed in {@link HttpHeaders}.
+     */
+    public HttpHeaders copy() {
+        return new DefaultHttpHeaders().set(this);
     }
 }

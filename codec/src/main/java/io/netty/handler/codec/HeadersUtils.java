@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -15,8 +15,8 @@
  */
 package io.netty.handler.codec;
 
+import java.util.AbstractCollection;
 import java.util.AbstractList;
-import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map.Entry;
@@ -73,18 +73,43 @@ public final class HeadersUtils {
     }
 
     /**
+     * Helper for implementing toString for {@link DefaultHeaders} and wrappers such as DefaultHttpHeaders.
+     * @param headersClass the class of headers
+     * @param headersIt the iterator on the actual headers
+     * @param size the size of the iterator
+     * @return a String representation of the headers
+     */
+    public static <K, V> String toString(Class<?> headersClass, Iterator<Entry<K, V>> headersIt, int size) {
+        String simpleName = headersClass.getSimpleName();
+        if (size == 0) {
+            return simpleName + "[]";
+        } else {
+            // original capacity assumes 20 chars per headers
+            StringBuilder sb = new StringBuilder(simpleName.length() + 2 + size * 20)
+                    .append(simpleName)
+                    .append('[');
+            while (headersIt.hasNext()) {
+                Entry<?, ?> header = headersIt.next();
+                sb.append(header.getKey()).append(": ").append(header.getValue()).append(", ");
+            }
+            sb.setLength(sb.length() - 2);
+            return sb.append(']').toString();
+        }
+    }
+
+    /**
      * {@link Headers#names()} and convert each element of {@link Set} to a {@link String}.
      * @param headers the headers to get the names from
      * @return a {@link Set} of header values or an empty {@link Set} if no values are found.
      */
     public static Set<String> namesAsString(Headers<CharSequence, CharSequence, ?> headers) {
-        return new CharSequenceDelegatingStringSet(headers.names());
+        return new DelegatingNameSet(headers);
     }
 
     private static final class StringEntryIterator implements Iterator<Entry<String, String>> {
         private final Iterator<Entry<CharSequence, CharSequence>> iter;
 
-        public StringEntryIterator(Iterator<Entry<CharSequence, CharSequence>> iter) {
+        StringEntryIterator(Iterator<Entry<CharSequence, CharSequence>> iter) {
             this.iter = iter;
         }
 
@@ -145,7 +170,7 @@ public final class HeadersUtils {
     private static final class StringIterator<T> implements Iterator<String> {
         private final Iterator<T> iter;
 
-        public StringIterator(Iterator<T> iter) {
+        StringIterator(Iterator<T> iter) {
             this.iter = iter;
         }
 
@@ -166,117 +191,31 @@ public final class HeadersUtils {
         }
     }
 
-    private static final class CharSequenceDelegatingStringSet extends DelegatingStringSet<CharSequence> {
-        public CharSequenceDelegatingStringSet(Set<CharSequence> allNames) {
-            super(allNames);
-        }
+    private static final class DelegatingNameSet extends AbstractCollection<String> implements Set<String> {
+        private final Headers<CharSequence, CharSequence, ?> headers;
 
-        @Override
-        public boolean add(String e) {
-            return allNames.add(e);
-        }
-
-        @Override
-        public boolean addAll(Collection<? extends String> c) {
-            return allNames.addAll(c);
-        }
-    }
-
-    private abstract static class DelegatingStringSet<T> implements Set<String> {
-        protected final Set<T> allNames;
-
-        public DelegatingStringSet(Set<T> allNames) {
-            this.allNames = checkNotNull(allNames, "allNames");
+        DelegatingNameSet(Headers<CharSequence, CharSequence, ?> headers) {
+            this.headers = checkNotNull(headers, "headers");
         }
 
         @Override
         public int size() {
-            return allNames.size();
+            return headers.names().size();
         }
 
         @Override
         public boolean isEmpty() {
-            return allNames.isEmpty();
+            return headers.isEmpty();
         }
 
         @Override
         public boolean contains(Object o) {
-            return allNames.contains(o.toString());
+            return headers.contains(o.toString());
         }
 
         @Override
         public Iterator<String> iterator() {
-            return new StringIterator<T>(allNames.iterator());
-        }
-
-        @Override
-        public Object[] toArray() {
-            Object[] arr = new Object[size()];
-            fillArray(arr);
-            return arr;
-        }
-
-        @SuppressWarnings("unchecked")
-        @Override
-        public <X> X[] toArray(X[] a) {
-            if (a == null || a.length < size()) {
-                X[] arr = (X[]) new Object[size()];
-                fillArray(arr);
-                return arr;
-            }
-            fillArray(a);
-            return a;
-        }
-
-        private void fillArray(Object[] arr) {
-            Iterator<T> itr = allNames.iterator();
-            for (int i = 0; i < size(); ++i) {
-                arr[i] = itr.next();
-            }
-        }
-
-        @Override
-        public boolean remove(Object o) {
-            return allNames.remove(o);
-        }
-
-        @Override
-        public boolean containsAll(Collection<?> c) {
-            for (Object o : c) {
-                if (!contains(o)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        @Override
-        public boolean removeAll(Collection<?> c) {
-            boolean modified = false;
-            for (Object o : c) {
-                if (remove(o)) {
-                    modified = true;
-                }
-            }
-            return modified;
-        }
-
-        @Override
-        public boolean retainAll(Collection<?> c) {
-            boolean modified = false;
-            Iterator<String> it = iterator();
-            while (it.hasNext()) {
-                if (!c.contains(it.next())) {
-                    it.remove();
-                    modified = true;
-                }
-            }
-            return modified;
-        }
-
-        @Override
-        public void clear() {
-            allNames.clear();
+            return new StringIterator<CharSequence>(headers.names().iterator());
         }
     }
 }

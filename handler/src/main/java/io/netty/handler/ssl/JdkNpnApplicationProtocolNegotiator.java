@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -19,7 +19,10 @@ import javax.net.ssl.SSLEngine;
 
 /**
  * The {@link JdkApplicationProtocolNegotiator} to use if you need NPN and are using {@link SslProvider#JDK}.
+ *
+ * @deprecated use {@link ApplicationProtocolConfig}.
  */
+@Deprecated
 public final class JdkNpnApplicationProtocolNegotiator extends JdkBaseApplicationProtocolNegotiator {
     private static final SslEngineWrapperFactory NPN_WRAPPER = new SslEngineWrapperFactory() {
         {
@@ -30,8 +33,8 @@ public final class JdkNpnApplicationProtocolNegotiator extends JdkBaseApplicatio
         }
 
         @Override
-        public SSLEngine wrapSslEngine(SSLEngine engine, JdkApplicationProtocolNegotiator applicationNegotiator,
-                boolean isServer) {
+        public SSLEngine wrapSslEngine(SSLEngine engine,
+                                       JdkApplicationProtocolNegotiator applicationNegotiator, boolean isServer) {
             return new JettyNpnSslEngine(engine, applicationNegotiator, isServer);
         }
     };
